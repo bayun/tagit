@@ -1,9 +1,9 @@
-#!/bin/perl -w
+#!/usr/bin/perl -w
 
 use strict;
 
 
-my $dataDir = '~/.local/share';
+my $dataDir = "$ENV{HOME}/.local/share/tagit";
 my $itemDir = "$dataDir/items";
 my $dbName = "$dataDir/base.sqlite";
 
@@ -19,54 +19,97 @@ use DBI;
 use Digest::MD5::File qw(file_md5_hex);
 use File::Spec;
 use File::Copy;
+use Getopt::Long;
 
 
-$base="dbi:SQLite:dbname=$dbName";
+my $base="dbi:SQLite:dbname=$dbName";
 my $dbh = DBI->connect($base,"","");
 
-while (1){
-    my $sth = $dbh->prepare("SELECT id,num,msg FROM queue WHERE state=0") or die $dbh->
-    $sth->execute();
-    $smss=$sth->fetchall_arrayref();
+
+
+
+
+parseArgs();
+
+
+
+
+sub parseArgs{
+	my $cmd;
+	unless (@ARGV) {
+		$cmd = 'help';
+	}
+	else {
+		$cmd = $ARGV[0];
+		shift @ARGV;
+	}
+	if ($cmd eq 'tag') {
+		my @tags;
+		GetOptions('tags=s{1,1000}' => \@tags);
+		foreach my $file (@ARGV) {
+		#tag file
+		unless (-f $file) {
+			print STDERR "tagit: Not found or is not palin file: $file\n";
+			exit 1;
+		}
+		tag(File::Spec->rel2abs($file), @tags);
+#			print "args:  @tags \nARGV:@ARGV\n";
+		}
+	}
 }
+
+
+
+
+
+
+
+
+
+
+
 
 sub tag {
 	my $file = shift;
 	my @tags = @_;
+	my $oid;
 
 #	create date-named dir
 	my @times = localtime;
 	$times[5] += 1900;
-	my $dirname = "$itemDir/$times[5]-$times[4]-$times[3]";
-	mkdir $dirname;
+	my $dirName = "$itemDir/$times[5]-$times[4]-$times[3]";
+	mkdir $dirName;
 
 # split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
 
 #	compute md5
-my $md5 = md5_hex($file);
+my $md5 = file_md5_hex($file);
+
+my $sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
+unless ($sth->execute($md5)) {
+	return -2;	#bad SQL
+};
+
+if ($oid = $sth->fetchrow_array()) {
+	return -3;	#already exists
+}
 
 #	hardlink file into this dir. If different filesystems - copy
 	if (!link $file, "$dirName/$md5") {
-# cannot create hardlink, so we need copy
-	my $result = copy $file, "$dirName/$md5";
-	if (!$result)
-		return -1;
-}
-	$dbh->do("BEGIN TRANSACTION")
-#	store in db: did	md5	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, time) VALUES (?, ?, ?)");
-	my $oid;
-	unless ($sth->execute($md5, $file, time())) {
-	# cannot insert may be, file already exists?
-	$sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
-	unless ($sth->execute($md5))
-		$dbh->do("ROLLBACK TRANSACTION")
-		return -2;	#bad SQL
-	} else {
-		$dbh->do("ROLLBACK TRANSACTION")
-		return -3;	#already exists
+	# cannot create hardlink, so we need copy
+		my $result = copy $file, "$dirName/$md5";
+		#if we cannot copy, abort
+		return -1 unless ($result);
 	}
+	$dbh->do("BEGIN TRANSACTION");
+#	store in db: did	md5	external_filename	add_time
+	$sth = $dbh->prepare("INSERT INTO objects (md5, source, date) VALUES (?, ?, ?)");
+	my $time = time;
+	unless ($sth->execute($md5, $file, $time)) {
+		# cannot insert may be, file already exists?
+		
+	}	
 	$oid = $dbh->func('last_insert_rowid');
 	my @tids;
 	my $tid;
@@ -75,12 +118,13 @@ my $md5 = md5_hex($file);
 		unless ($sth->execute($tag)) {
 			$sth = $dbh->prepare("SELECT tid FROM tags WHERE name=?");
 			unless ($sth->execute($tag)) {
-				$dbh->do("ROLLBACK TRANSACTION")
+				$dbh->do("ROLLBACK TRANSACTION");
 				return -3;
 			}
-			unless ($tid = $sth->fetchrow_array())
-				$dbh->do("ROLLBACK TRANSACTION")
+			unless ($tid = $sth->fetchrow_array()) {
+				$dbh->do("ROLLBACK TRANSACTION");
 				return -3;
+			}
 		} else {
 			$tid = $dbh->func('last_insert_rowid');
 		}
@@ -91,8 +135,8 @@ my $md5 = md5_hex($file);
 	
 	foreach $tid (@tids) {
 		$sth = $dbh->prepare("INSERT INTO links (oid, tid) VALUES (?, ?)");
-			unless ($sth->exucute($oid, $tid)) {
-				$dbh->do("ROLLBACK TRANSACTION")
+			unless ($sth->execute($oid, $tid)) {
+				$dbh->do("ROLLBACK TRANSACTION");
 				return -3;
 			}
 	}
