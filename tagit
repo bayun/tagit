@@ -15,6 +15,11 @@ my $dbName = "$dataDir/base.sqlite";
 # 5) TODO: add VCS suport
 # 6) TODO: add URL handling: retrieve, store & tag page
 
+use constant NOT_FOUND		=>	-1;
+use constant ALREADY_EXISTS	=>	-2;
+use constant SQL_ERROR		=>	-3;
+use constant FS_ERROR		=>	-4;
+
 use DBI;
 use Digest::MD5::File qw(file_md5_hex);
 use File::Spec;
@@ -47,13 +52,16 @@ sub parseArgs{
 		my @tags;
 		GetOptions('tags=s{1,1000}' => \@tags);
 		foreach my $file (@ARGV) {
-		#tag file
-		unless (-f $file) {
-			print STDERR "tagit: Not found or is not palin file: $file\n";
-			exit 1;
+			#tag file
+			unless (-f $file) {
+				print STDERR "tagit: Not found or is not palin file: $file\n";
+				exit 1;
+			}
+			tag(File::Spec->rel2abs($file), @tags);
 		}
-		tag(File::Spec->rel2abs($file), @tags);
-#			print "args:  @tags \nARGV:@ARGV\n";
+	} elsif ($cmd eq 'describe') {
+		foreach my $file (@ARGV) {
+			describe(File::Spec->rel2abs($file));
 		}
 	}
 }
@@ -62,6 +70,22 @@ sub parseArgs{
 
 
 
+
+sub describe {
+	my $file = shift;
+	my $md5 = file_md5_hex($file);
+	
+	my $sth = $dbh->prepare(
+		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.md5=?");
+	return SQL_ERROR unless ($sth->execute($md5));
+	print "$md5:";
+	my $i = 0;
+	while (my $tag = $sth->fetchrow_array) {
+		print ',' if ($i++);
+		print " $tag";
+	}
+	print "\n";
+}
 
 
 
@@ -86,25 +110,18 @@ sub tag {
 #	compute md5
 my $md5 = file_md5_hex($file);
 
-my $sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
-unless ($sth->execute($md5)) {
-	return -2;	#bad SQL
-};
-
-if ($oid = $sth->fetchrow_array()) {
-	return -3;	#already exists
-}
+return ALREADY_EXISTS unless (findObject($md5) == NOT_FOUND);
 
 #	hardlink file into this dir. If different filesystems - copy
 	if (!link $file, "$dirName/$md5") {
 	# cannot create hardlink, so we need copy
 		my $result = copy $file, "$dirName/$md5";
 		#if we cannot copy, abort
-		return -1 unless ($result);
+		return FS_ERROR unless ($result);
 	}
 	$dbh->do("BEGIN TRANSACTION");
 #	store in db: did	md5	external_filename	add_time
-	$sth = $dbh->prepare("INSERT INTO objects (md5, source, date) VALUES (?, ?, ?)");
+	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, date) VALUES (?, ?, ?)");
 	my $time = time;
 	unless ($sth->execute($md5, $file, $time)) {
 		# cannot insert may be, file already exists?
@@ -116,15 +133,8 @@ if ($oid = $sth->fetchrow_array()) {
 	foreach my $tag (@tags) {
 		$sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
 		unless ($sth->execute($tag)) {
-			$sth = $dbh->prepare("SELECT tid FROM tags WHERE name=?");
-			unless ($sth->execute($tag)) {
-				$dbh->do("ROLLBACK TRANSACTION");
-				return -3;
-			}
-			unless ($tid = $sth->fetchrow_array()) {
-				$dbh->do("ROLLBACK TRANSACTION");
-				return -3;
-			}
+			$dbh->do("ROLLBACK TRANSACTION");
+			return SQL_ERROR;
 		} else {
 			$tid = $dbh->func('last_insert_rowid');
 		}
@@ -137,11 +147,26 @@ if ($oid = $sth->fetchrow_array()) {
 		$sth = $dbh->prepare("INSERT INTO links (oid, tid) VALUES (?, ?)");
 			unless ($sth->execute($oid, $tid)) {
 				$dbh->do("ROLLBACK TRANSACTION");
-				return -3;
+				return SQL_ERROR;
 			}
 	}
 	$dbh->do("COMMIT TRANSACTION");
 	
 
 
+}
+
+
+sub findObject{
+	my $md5 = shift;
+
+	my $sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
+	unless ($sth->execute($md5)) {
+		return SQL_ERROR;
+	};
+	my $oid;
+	unless ($oid = $sth->fetchrow_array()) {
+		return NOT_FOUND;
+	}
+	return $oid;
 }
