@@ -1,0 +1,103 @@
+#!/bin/perl -w
+
+use strict;
+
+
+my $dataDir = '~/.local/share';
+my $itemDir = "$dataDir/items";
+my $dbName = "$dataDir/base.sqlite";
+
+
+# 1) tagit tag file1 [file2...] -t tag1[,tag2...]
+# 2) tagit describe filename
+# 3) tagit show tag
+# 4) TODO: tagit search term
+# 5) TODO: add VCS suport
+# 6) TODO: add URL handling: retrieve, store & tag page
+
+use DBI;
+use Digest::MD5::File qw(file_md5_hex);
+use File::Spec;
+use File::Copy;
+
+
+$base="dbi:SQLite:dbname=$dbName";
+my $dbh = DBI->connect($base,"","");
+
+while (1){
+    my $sth = $dbh->prepare("SELECT id,num,msg FROM queue WHERE state=0") or die $dbh->
+    $sth->execute();
+    $smss=$sth->fetchall_arrayref();
+}
+
+sub tag {
+	my $file = shift;
+	my @tags = @_;
+
+#	create date-named dir
+	my @times = localtime;
+	$times[5] += 1900;
+	my $dirname = "$itemDir/$times[5]-$times[4]-$times[3]";
+	mkdir $dirname;
+
+# split filename to parts
+	my ($vol, $path, $fName) = File::Spec->splitpath($file);
+
+#	compute md5
+my $md5 = md5_hex($file);
+
+#	hardlink file into this dir. If different filesystems - copy
+	if (!link $file, "$dirName/$md5") {
+# cannot create hardlink, so we need copy
+	my $result = copy $file, "$dirName/$md5";
+	if (!$result)
+		return -1;
+}
+	$dbh->do("BEGIN TRANSACTION")
+#	store in db: did	md5	external_filename	add_time
+	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, time) VALUES (?, ?, ?)");
+	my $oid;
+	unless ($sth->execute($md5, $file, time())) {
+	# cannot insert may be, file already exists?
+	$sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
+	unless ($sth->execute($md5))
+		$dbh->do("ROLLBACK TRANSACTION")
+		return -2;	#bad SQL
+	} else {
+		$dbh->do("ROLLBACK TRANSACTION")
+		return -3;	#already exists
+	}
+	$oid = $dbh->func('last_insert_rowid');
+	my @tids;
+	my $tid;
+	foreach my $tag (@tags) {
+		$sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
+		unless ($sth->execute($tag)) {
+			$sth = $dbh->prepare("SELECT tid FROM tags WHERE name=?");
+			unless ($sth->execute($tag)) {
+				$dbh->do("ROLLBACK TRANSACTION")
+				return -3;
+			}
+			unless ($tid = $sth->fetchrow_array())
+				$dbh->do("ROLLBACK TRANSACTION")
+				return -3;
+		} else {
+			$tid = $dbh->func('last_insert_rowid');
+		}
+		push @tids, $tid;
+
+	}
+#	store in db for each new tag: tid	tagname;	did	tid
+	
+	foreach $tid (@tids) {
+		$sth = $dbh->prepare("INSERT INTO links (oid, tid) VALUES (?, ?)");
+			unless ($sth->exucute($oid, $tid)) {
+				$dbh->do("ROLLBACK TRANSACTION")
+				return -3;
+			}
+	}
+	$dbh->do("COMMIT TRANSACTION");
+	
+
+
+}
