@@ -9,7 +9,7 @@ my $dbName = "$dataDir/base.sqlite";
 
 
 # 1) tagit tag file1 [file2...] -t tag1[,tag2...]
-# 2) tagit describe filename
+# 2) tagit show filename
 # 3) tagit show tag
 # 4) TODO: tagit search term
 # 5) TODO: add VCS suport
@@ -59,19 +59,29 @@ sub parseArgs{
 			}
 			tag(File::Spec->rel2abs($file), @tags);
 		}
-	} elsif ($cmd eq 'describe') {
+	} elsif ($cmd eq 'show') {
 		foreach my $file (@ARGV) {
-			describe(File::Spec->rel2abs($file));
+			show(File::Spec->rel2abs($file));
 		}
+	} elsif ($cmd eq 'taglist') {
+		taglist();
 	}
 }
 
 
 
 
+sub taglist {
+	my $sth = $dbh->prepare("SELECT name FROM tags");
+	return SQL_ERROR unless ($sth->execute());
+	while (my $tag = $sth->fetchrow_array) {
+		print "$tag\n";
+	}
+}
 
 
-sub describe {
+
+sub show {
 	my $file = shift;
 	my $md5 = file_md5_hex($file);
 	
@@ -86,11 +96,6 @@ sub describe {
 	}
 	print "\n";
 }
-
-
-
-
-
 
 
 sub tag {
@@ -121,12 +126,12 @@ return ALREADY_EXISTS unless (findObject($md5) == NOT_FOUND);
 	}
 	$dbh->do("BEGIN TRANSACTION");
 #	store in db: did	md5	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, date) VALUES (?, ?, ?)");
+	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, title, date) VALUES (?, ?, ?, ?)");
 	my $time = time;
-	unless ($sth->execute($md5, $file, $time)) {
-		# cannot insert may be, file already exists?
-		
-	}	
+	unless ($sth->execute($md5, $file, $fName, $time)) {
+		$dbh->do("ROLLBACK TRANSACTION");
+		return SQL_ERROR;
+	}
 	$oid = $dbh->func('last_insert_rowid');
 	my @tids;
 	my $tid;

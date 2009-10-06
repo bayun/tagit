@@ -3,6 +3,8 @@ CREATE TABLE objects (
 oid INTEGER PRIMARY KEY asc,
 md5 TEXT UNIQUE, 
 source TEXT,
+title TEXT,
+description TEXT,
 date INTEGER);
 CREATE TABLE tags (
 tid INTEGER PRIMARY KEY asc,
