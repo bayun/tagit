@@ -35,9 +35,11 @@ my $dbName = "$dataDir/base.sqlite";
 #
 # Also we need two behaviors when user tryes to add object that already exists in database.
 # defaut variant: message "Object XXX already exists" and return code 11
-#	-r (--readd)	- just skip object addition and proceed requested operation
+#	-i (--ignore)	- just skip object addition and proceed requested operation
 # for `tag' command we can also add
 #	-c (--copy)		- always copy content, don't try to create a hardlink
+# we have also two behavior variants on nonfatal errors, like if one of
+# given objects not found, so we have switch:
 
 
 use constant SQLITE_ERROR     =>   1;   # SQL error or missing database
@@ -95,8 +97,8 @@ my %config = (	tags	=> [],
 				file	=> [],
 				hash	=> [],
 				force	=> 0,
-				readd	=> 0,
 				copy	=> 0,
+				ignore	=> 0,
 	);
 
 my %commands = (
@@ -145,6 +147,7 @@ my %commands = (
 );
 
 my $cmd;
+my $objectList;
 GetOptions(
 	\%config,
 	'hash|h=s@{1,1000}',
@@ -153,8 +156,8 @@ GetOptions(
 	'file|f=s@{1,1000}',
 	'tags|t=s@{1,1000}',
 	'force|F',
-	'readd|r',
 	'copy|c',
+	'ignore|i',
 );
 if (@ARGV) {
 	$cmd = shift;
@@ -163,7 +166,7 @@ if (@ARGV) {
 }
 stop("Invalid command", 1) unless exists $commands{$cmd};
 if ($commands{$cmd}->{objects}) {
-	createObjectList();
+	$objectList = createObjectList();
 }
 # add onprocessed arguments into config-defined list: tags, file, hash etc
 if (@ARGV) {
@@ -176,7 +179,53 @@ use Data::Dumper;
 print Dumper(\%config);
 
 sub createObjectList {
-	
+	my @objectList;
+	my $arr;
+	# we have 2 modes for 'file':
+	#	1) if we ADD files (unsafe=1), these files must NOT be in database (but we can ignore existence if
+	#		--ignore key specified).
+	#	2) if we QUERY database, we use fles as source for hash computation and add them to hash array. If
+	#		such hash is absend in database, hash handling code returns error or jus continue, depending of
+	#		--ignore switch presense
+	foreach $fName (@{$config{file}}) {
+		unless (-f $fName) {
+			next if ($config{ignore};
+			stop("File not found: $fName", 2);
+		}
+		my $hash = file_md5_hex($fName);
+		my $row = findObjects('hash', $hash);
+		if ($commands{$cmd}->{unsafe}) {
+			if ($row != NOT_FOUND) {
+				if ($config{ignore} {
+					push @{$config{hash}}, $hash;
+				} else {
+					stop("File $fName already exists in database. Use --ignore switch to process command with it", 2);
+				}
+			} else {
+				$config{files_checked}->{$fName} = $hash;
+			}
+		} else {
+			if ($row == NOT_FOUND) {
+				stop("File $fName was not found in database. You need to add it first using 'add' or 'attach' commands", 2);
+			}
+			push @{$config{hash}}, $hash;
+		}
+	}
+
+	foreach my $hash (@{$config{hash}}) {
+		$arr = findObjects('hash', $hash, \@objectList);
+		if ($arr == SQL_ERROR)
+			return SQL_ERROR;
+		stop("There is no such object: $hash", 2) if ($arr == NOT_FOUND && !$config{ignore});
+	}
+	foreach $type('hash', 'name', 'source') {
+		foreach my $value (@{$config{$value}}) {
+			$arr = findObjects($type, $value, \@objectList);
+			if ($arr == SQL_ERROR)
+				return SQL_ERROR;
+			stop("There is no such object: $hash", 2) if ($arr == NOT_FOUND && !$config{ignore});
+		}
+	}
 }
 
 #parseArgs();
@@ -209,52 +258,36 @@ sub parseArgs {
 		foreach my $file (@ARGV) {
 			cmdShow(File::Spec->rel2abs($file));
 		}
-	} elsif ($cmd eq 'taglist') {
-		cmdTaglist();
-	} elsif ($cmd eq 'list') {
-		foreach $tag (@ARGV) {
-			cmdList($tag);
-		}
-	} elsif ($cmd eq 'get') {
-		doExtract(\&my_symlink);
-	} elsif ($cmd eq 'export') {
-		doExtract(\&copy);
 	}
 }
 
 
-sub doExtract {
-	my $extractFunc = shift;
-	my @tags;
-	my $objects = {};
-	GetOptions('tags=s{1,1000}' => \@tags);
-	foreach my $tag (@tags) {
-		unless (ref listTagContent($tag, $objects)) {
-			print STDERR "Internal Error\n";
-			exit(2);
-		}
+sub getTagsObjects {
+	# ref to array of tag names
+	my $tags = shift;
+	# ref to destination array - optional
+	my $objects;
+	$objects = shift if (@_);
+	my $results = {};
+	foreach my $tag(@$tags) {
+		my $tagContent = listTagContent($tag, $results);
+		stop("Internal Error", 2) if ($tagContent == SQL_ERROR);
 	}
-	# TODO: add switch to get files by name or source. Default is hash
-	foreach my $object (@ARGV) {
-		my $objInfo = getObjectInfo($object);
-		if ($objInfo == NOT_FOUND) {
-			print STDERR "Object $object not found.\n";
-			next;
-		} elsif ($objInfo == SQL_ERROR) {
-			print STDERR "Internal Error\n";
-			exit(2);
-		}
-		$objects->{$objInfo->{hash}} = $objInfo;
-	}
-	extractList($objects, $extractFunc);
+	hashMerge $objects, $results if $objects;
+	return $results;
 }
 
+sub cmdGet {
+	extractList(getTagsObjects($config{tags}), \&my_symlink);
+}
 
+sub cmdExport {
+	extractList(getTagsObjects($config{tags}), \&copy);
+}
 
 sub my_symlink{
 	return symlink $_[0], $_[1];
 }
-
 
 sub extractList{
 	# extracts objects given by first arg ot user filesystem using function given by second arg.
@@ -263,7 +296,7 @@ sub extractList{
 	my $exportFunc = shift;
 	while (my ($hash, $objInfo) = each %$objects) {
 		my $path = addtime2dir($objInfo->{addtime}) . "/$hash";
-# TODO: hackish - need to handle URLs
+		# TODO: hackish - need to handle URLs
 		my (undef, undef, $fName) = File::Spec->splitpath($objInfo->{source});
 		my ($name, $ext);
 		if ($fName =~ /(.*?[^\\])\.(.*)$/) {
@@ -282,12 +315,10 @@ sub extractList{
 
 
 sub cmdList {
-	my $tag = shift;
-	my $files = listTagContent($tag);
+	my $files = getTagsObjects($config{tags});
 # TODO: decide, if I need to show error 'tag not found', or just show empty tag
 	return $files unless (ref $files);
-# TODO:	add option to show md5, title or both
-
+# TODO:	add option to change output format
 	while (my ($hash, $row) = each(%$files)) {
 		print "$row->{hash}: $row->{source}\n";
 	}
@@ -295,23 +326,33 @@ sub cmdList {
 
 sub listTagContent {
 	my $tag = shift;
-	my $files;
+	my $objects;
 	if (@_) {
-		#if we have second arg, it's ref hashe where we must append results
-		$files = shift;
+		#if we have second arg, it's ref to hash where we must append results
+		$obejcts = shift;
 	} else {
-		$files = {};
+		$objects = {};
 	}
+	my $result = {};
 	my $row;
 	my $sth = $dbh->prepare(
-		"SELECT hash, source, addtime, title, description FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
+		"SELECT * FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
 	return SQL_ERROR unless($sth->execute($tag));
 	while ($row = $sth->fetchrow_hashref) {
-		$files->{$row->{hash}} = $row;
+		$result->{$row->{hash}} = $row;
 	}
-	return $files;
+	return NOT_FOUND unless (%$result);
+	hashMerge $objects, $result if ($objects);
+	return $result;
 }
 
+
+sub hashMerge {
+	return undef unless @_;
+	my $main = shift;
+	$main->{$k} = $v while (my ($k, $v) = each(%$hash)) foreach my $hash (@_);
+	return $main;
+}
 
 sub getObjectInfo {
 	my $hash = shift;
@@ -333,9 +374,24 @@ sub cmdTaglist {
 	}
 }
 
-
-
+sub getObjectTags {
+	# accepts hash that identify object;
+	# returns ref to list with tag names
+	my $hash = shift;
+	my @tags;
+	my $sth = $dbh->prepare(
+		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
+	return SQL_ERROR unless ($sth->execute($hash));
+	while (my $tagName = $sth->fetchrow_array) {
+		push @tags, $tagName;
+	}
+	return \@tags;
+}
 sub cmdShow {
+	while (my ($hash, $row) = each(%$objectList)) {
+		my $tags = getObjectTags($hash);
+
+	}
 	my $file = shift;
 	my $hash = file_md5_hex($file);
 	
@@ -352,12 +408,10 @@ sub cmdShow {
 }
 
 
-sub cmdTag {
-	my $file = shift;
-	my @tags = @_;
-	my $oid;
+sub grabObject {
+	my ($fName, $hash) = @_;
 
-#	create addtime-named dir
+#	create date-named dir
 	my $time = time();
 	my $dirName = addtime2dir($time);
 	mkdir $dirName;
@@ -365,18 +419,26 @@ sub cmdTag {
 # split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
 
-#	compute hash
-my $hash = file_md5_hex($file);
-
-return ALREADY_EXISTS unless (findObject($hash) == NOT_FOUND);
-
-#	hardlink file into this dir. If different filesystems - copy
-	if (!link $file, "$dirName/$hash") {
+	# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
+	if ($config{copy} || !link $file, "$dirName/$hash") {
 	# cannot create hardlink, so we need copy
 		my $result = copy $file, "$dirName/$hash";
 		#if we cannot copy, abort
 		return FS_ERROR unless ($result);
 	}
+}
+
+sub cmdTag {
+	my $file = shift;
+	my @tags = @_;
+	my $oid;
+	my $time = time();
+	while(my ($file, $hash) = each %{$config{files_checked}) {
+		grabObject($file, $hash);
+	}
+######### TODO: move file-import-to-DB-related code into grabObject, leave there only tagging
+	my ($vol, $path, $fName) = File::Spec->splitpath($file);
+	$fName = File::Spec->rel2abs($file));
 	$dbh->do("BEGIN TRANSACTION");
 #	store in db: did	hash	external_filename	add_time
 	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, addtime) VALUES (?, ?, ?, ?)");
@@ -418,20 +480,29 @@ sub saveObject{
 
 }
 
-sub findObject{
-	# value to search
-	my $hash = shift;
-	# field to search - reasonable variants are: hash, title, source, addtime
+sub findObjects{
+	# field to search - reasonable variants are: oid, hash, title. Possible also source, addtime and description, 
+	# but these fields are not indexed
 	my $field = shift;
-	my $sth = $dbh->prepare("SELECT oid FROM objects WHERE hash=?");
-	unless ($sth->execute($hash)) {
+	# value to search
+	my $value = shift;
+	# ref to hash to add result (optional)
+	# returns ref to hash: $hash => $row
+	my $objects;
+	if (@_)
+		$objects = shift;
+	my %results;
+	my $sth = $dbh->prepare("SELECT * FROM objects WHERE $field=?");
+	unless ($sth->execute($value)) {
 		return SQL_ERROR;
 	};
-	my $oid;
-	unless ($oid = $sth->fetchrow_array()) {
-		return NOT_FOUND;
+	my $row;
+	while ($row = $sth->fetchrow_hashref()) {
+		results{$row->{hash}} = $row;
 	}
-	return $oid;
+	return NOT_FOUND if (!%results);
+	hashMerge $objects, \%results if ($objects);
+	return \%results;
 }
 
 sub addtime2dir {
