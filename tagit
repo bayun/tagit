@@ -262,7 +262,7 @@ sub extractList{
 	my $objects = shift;
 	my $exportFunc = shift;
 	while (my ($hash, $objInfo) = each %$objects) {
-		my $path = date2dir($objInfo->{date}) . "/$hash";
+		my $path = addtime2dir($objInfo->{addtime}) . "/$hash";
 # TODO: hackish - need to handle URLs
 		my (undef, undef, $fName) = File::Spec->splitpath($objInfo->{source});
 		my ($name, $ext);
@@ -304,7 +304,7 @@ sub listTagContent {
 	}
 	my $row;
 	my $sth = $dbh->prepare(
-		"SELECT hash, source, date, title, description FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
+		"SELECT hash, source, addtime, title, description FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
 	return SQL_ERROR unless($sth->execute($tag));
 	while ($row = $sth->fetchrow_hashref) {
 		$files->{$row->{hash}} = $row;
@@ -316,7 +316,7 @@ sub listTagContent {
 sub getObjectInfo {
 	my $hash = shift;
 	my $result;
-	my $sth = $dbh->prepare("SELECT hash, source, date, title, description FROM objects WHERE hash=?");
+	my $sth = $dbh->prepare("SELECT hash, source, addtime, title, description FROM objects WHERE hash=?");
 	return SQL_ERROR unless ($sth->execute($hash));
 	return NOT_FOUND unless ($result = $sth->fetchrow_hashref());
 	return $result;
@@ -357,9 +357,9 @@ sub cmdTag {
 	my @tags = @_;
 	my $oid;
 
-#	create date-named dir
+#	create addtime-named dir
 	my $time = time();
-	my $dirName = date2dir($time);
+	my $dirName = addtime2dir($time);
 	mkdir $dirName;
 
 # split filename to parts
@@ -379,7 +379,7 @@ return ALREADY_EXISTS unless (findObject($hash) == NOT_FOUND);
 	}
 	$dbh->do("BEGIN TRANSACTION");
 #	store in db: did	hash	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, date) VALUES (?, ?, ?, ?)");
+	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, addtime) VALUES (?, ?, ?, ?)");
 	unless ($sth->execute($hash, $file, $fName, $time)) {
 		$dbh->do("ROLLBACK TRANSACTION");
 		return SQL_ERROR;
@@ -419,8 +419,10 @@ sub saveObject{
 }
 
 sub findObject{
+	# value to search
 	my $hash = shift;
-
+	# field to search - reasonable variants are: hash, title, source, addtime
+	my $field = shift;
 	my $sth = $dbh->prepare("SELECT oid FROM objects WHERE hash=?");
 	unless ($sth->execute($hash)) {
 		return SQL_ERROR;
@@ -432,9 +434,9 @@ sub findObject{
 	return $oid;
 }
 
-sub date2dir {
-	my  $date = shift;
-	my @times = localtime($date);
+sub addtime2dir {
+	my  $addtime = shift;
+	my @times = localtime($addtime);
 	$times[5] += 1900;
 	return "$itemDir/$times[5]-$times[4]-$times[3]";
 };
