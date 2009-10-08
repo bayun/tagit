@@ -234,7 +234,7 @@ sub doExtract {
 			exit(2);
 		}
 	}
-	# TODO: add switch to get files by name or source. Default is md5
+	# TODO: add switch to get files by name or source. Default is hash
 	foreach my $object (@ARGV) {
 		my $objInfo = getObjectInfo($object);
 		if ($objInfo == NOT_FOUND) {
@@ -244,7 +244,7 @@ sub doExtract {
 			print STDERR "Internal Error\n";
 			exit(2);
 		}
-		$objects->{$objInfo->{md5}} = $objInfo;
+		$objects->{$objInfo->{hash}} = $objInfo;
 	}
 	extractList($objects, $extractFunc);
 }
@@ -261,8 +261,8 @@ sub extractList{
 	# For example, it can be symlink or copy
 	my $objects = shift;
 	my $exportFunc = shift;
-	while (my ($md5, $objInfo) = each %$objects) {
-		my $path = date2dir($objInfo->{date}) . "/$md5";
+	while (my ($hash, $objInfo) = each %$objects) {
+		my $path = date2dir($objInfo->{date}) . "/$hash";
 # TODO: hackish - need to handle URLs
 		my (undef, undef, $fName) = File::Spec->splitpath($objInfo->{source});
 		my ($name, $ext);
@@ -288,8 +288,8 @@ sub cmdList {
 	return $files unless (ref $files);
 # TODO:	add option to show md5, title or both
 
-	while (my ($md5, $row) = each(%$files)) {
-		print "$row->{md5}: $row->{source}\n";
+	while (my ($hash, $row) = each(%$files)) {
+		print "$row->{hash}: $row->{source}\n";
 	}
 }
 
@@ -304,20 +304,20 @@ sub listTagContent {
 	}
 	my $row;
 	my $sth = $dbh->prepare(
-		"SELECT md5, source, date, title, description FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
+		"SELECT hash, source, date, title, description FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
 	return SQL_ERROR unless($sth->execute($tag));
 	while ($row = $sth->fetchrow_hashref) {
-		$files->{$row->{md5}} = $row;
+		$files->{$row->{hash}} = $row;
 	}
 	return $files;
 }
 
 
 sub getObjectInfo {
-	my $md5 = shift;
+	my $hash = shift;
 	my $result;
-	my $sth = $dbh->prepare("SELECT md5, source, date, title, description FROM objects WHERE md5=?");
-	return SQL_ERROR unless ($sth->execute($md5));
+	my $sth = $dbh->prepare("SELECT hash, source, date, title, description FROM objects WHERE hash=?");
+	return SQL_ERROR unless ($sth->execute($hash));
 	return NOT_FOUND unless ($result = $sth->fetchrow_hashref());
 	return $result;
 }
@@ -337,12 +337,12 @@ sub cmdTaglist {
 
 sub cmdShow {
 	my $file = shift;
-	my $md5 = file_md5_hex($file);
+	my $hash = file_md5_hex($file);
 	
 	my $sth = $dbh->prepare(
-		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.md5=?");
-	return SQL_ERROR unless ($sth->execute($md5));
-	print "$md5:";
+		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
+	return SQL_ERROR unless ($sth->execute($hash));
+	print "$hash:";
 	my $i = 0;
 	while (my $tag = $sth->fetchrow_array) {
 		print ',' if ($i++);
@@ -365,22 +365,22 @@ sub cmdTag {
 # split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
 
-#	compute md5
-my $md5 = file_md5_hex($file);
+#	compute hash
+my $hash = file_md5_hex($file);
 
-return ALREADY_EXISTS unless (findObject($md5) == NOT_FOUND);
+return ALREADY_EXISTS unless (findObject($hash) == NOT_FOUND);
 
 #	hardlink file into this dir. If different filesystems - copy
-	if (!link $file, "$dirName/$md5") {
+	if (!link $file, "$dirName/$hash") {
 	# cannot create hardlink, so we need copy
-		my $result = copy $file, "$dirName/$md5";
+		my $result = copy $file, "$dirName/$hash";
 		#if we cannot copy, abort
 		return FS_ERROR unless ($result);
 	}
 	$dbh->do("BEGIN TRANSACTION");
-#	store in db: did	md5	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (md5, source, title, date) VALUES (?, ?, ?, ?)");
-	unless ($sth->execute($md5, $file, $fName, $time)) {
+#	store in db: did	hash	external_filename	add_time
+	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, date) VALUES (?, ?, ?, ?)");
+	unless ($sth->execute($hash, $file, $fName, $time)) {
 		$dbh->do("ROLLBACK TRANSACTION");
 		return SQL_ERROR;
 	}
@@ -419,10 +419,10 @@ sub saveObject{
 }
 
 sub findObject{
-	my $md5 = shift;
+	my $hash = shift;
 
-	my $sth = $dbh->prepare("SELECT oid FROM objects WHERE md5=?");
-	unless ($sth->execute($md5)) {
+	my $sth = $dbh->prepare("SELECT oid FROM objects WHERE hash=?");
+	unless ($sth->execute($hash)) {
 		return SQL_ERROR;
 	};
 	my $oid;

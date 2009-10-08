@@ -24,7 +24,7 @@ INSERT INTO "links" VALUES(3,1,6);
 CREATE TABLE attach (aid INTEGER PRIMARY KEY asc,
 pid INTEGER NOT NULL,
 cid INTEGER NOT NULL);
-CREATE UNIQUE INDEX md5 on objects (md5);
+CREATE UNIQUE INDEX hash on objects (hash);
 CREATE INDEX oid on links (oid);
 CREATE INDEX tid on links (tid);
 CREATE INDEX pid on attach (pid);
