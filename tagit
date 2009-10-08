@@ -17,10 +17,28 @@ my $dbName = "$dataDir/base.sqlite";
 # 6)+tagit export mytag
 #	+tagit export -t mytag [mytag2...]
 # 7) TODO: tagit attach object file1 [file2...]
-# 7) TODO: tagit search term
+# 7) TODO: tagit search term	- must search in CONTENT
 # 8) TODO: add VCS suport
 # 9) TODO: add URL handling: retrieve, store & tag page
 #10) TODO: object relations. mytag tie object1 object2
+
+# TODO:
+# where stored object used as argument, use identification by:
+#	-h (--hash)		- content hash (default)
+#	-n (--name)		- object name
+#	-s (--source)	- source path
+#	-f (--file)		- file in user filesystem to compute hash and use it
+# --name and --source can point to multiple objects. In that case, where possible
+# and safe we  will use all. If it is unsafe we will return "Ambiguous argument" and code 10
+# unsafe operations with multiple objects can be forced with
+#	-F (--force)	- allow unsafe operations
+#
+# Also we need two behaviors when user tryes to add object that already exists in database.
+# defaut variant: message "Object XXX already exists" and return code 11
+#	-r (--readd)	- just skip object addition and proceed requested operation
+# for `tag' command we can also add
+#	-c (--copy)		- always copy content, don't try to create a hardlink
+
 
 use constant SQLITE_ERROR     =>   1;   # SQL error or missing database
 use constant SQLITE_INTERNAL  =>   2;   # Internal logic error in SQLite
@@ -61,7 +79,7 @@ use DBI;
 use Digest::MD5::File qw(file_md5_hex);
 use File::Spec;
 use File::Copy;
-use Getopt::Long;
+use Getopt::Long qw (:config auto_abbrev permute no_ignore_case);
 
 
 my $base="dbi:SQLite:dbname=$dbName";
@@ -71,11 +89,97 @@ my $dbh = DBI->connect($base,"","",
 	}
 );
 
+my %config = (	tags	=> [], 
+				name	=> [],
+				source	=> [],
+				file	=> [],
+				hash	=> [],
+				force	=> 0,
+				readd	=> 0,
+				copy	=> 0,
+	);
 
+my %commands = (
+	tag		=>{
+		objects => 1,
+		func	=> \&cmdTag,
+		unsafe	=> 1,
+		args	=> 'file',
+	},
+	show	=>{
+		objects => 1,
+		func	=> \&cmdShow,
+		unsafe	=> 0,
+		args	=> 'hash',
+	},
+	list	=>{
+		objects => 0,
+		func	=> \&cmdList,
+		unsafe	=> 0,
+		args	=> 'tags',
+	},
+	taglist	=>{
+		objects => 0,
+		func	=> \&cmdTaglist,
+		unsafe	=> 0,
+		args	=> '',
+	},
+	get		=>{
+		objects => 1,
+		func	=> \&cmdGet,
+		unsafe	=> 0,
+		args	=> 'hash',
+	},
+	export	=>{
+		objects => 1,
+		func	=> \&cmdExport,
+		unsafe	=> 0,
+		args	=> 'hash',
+	},
+	attach	=>{
+		objects => 1,
+		func	=> \&cmdAttach,
+		unsafe	=> 1,
+		args	=> 'hash',
+	},
+);
 
+my $cmd;
+GetOptions(
+	\%config,
+	'hash|h=s@{1,1000}',
+	'name|n=s@{1,1000}',
+	'source|s=s@{1,1000}',
+	'file|f=s@{1,1000}',
+	'tags|t=s@{1,1000}',
+	'force|F',
+	'readd|r',
+	'copy|c',
+);
+if (@ARGV) {
+	$cmd = shift;
+} else {
+	stop("You must give a command", 1);
+}
+stop("Invalid command", 1) unless exists $commands{$cmd};
+if ($commands{$cmd}->{objects}) {
+	createObjectList();
+}
+# add onprocessed arguments into config-defined list: tags, file, hash etc
+if (@ARGV) {
+	push @{$config{$commands{$cmd}->{args}}}, @ARGV;
+}
+#commands{$cmd}->func();
 
+use Data::Dumper;
 
-parseArgs();
+print Dumper(\%config);
+
+sub createObjectList {
+	
+}
+
+#parseArgs();
 
 
 
@@ -99,14 +203,14 @@ sub parseArgs {
 				print STDERR "tagit: Not found or is not palin file: $file\n";
 				exit 1;
 			}
-			tag(File::Spec->rel2abs($file), @tags);
+			cmdTag(File::Spec->rel2abs($file), @tags);
 		}
 	} elsif ($cmd eq 'show') {
 		foreach my $file (@ARGV) {
-			show(File::Spec->rel2abs($file));
+			cmdShow(File::Spec->rel2abs($file));
 		}
 	} elsif ($cmd eq 'taglist') {
-		taglist();
+		cmdTaglist();
 	} elsif ($cmd eq 'list') {
 		foreach $tag (@ARGV) {
 			cmdList($tag);
@@ -189,7 +293,6 @@ sub cmdList {
 	}
 }
 
-
 sub listTagContent {
 	my $tag = shift;
 	my $files;
@@ -221,7 +324,7 @@ sub getObjectInfo {
 
 
 
-sub taglist {
+sub cmdTaglist {
 	my $sth = $dbh->prepare("SELECT name FROM tags");
 	return SQL_ERROR unless ($sth->execute());
 	my $tag;
@@ -232,7 +335,7 @@ sub taglist {
 
 
 
-sub show {
+sub cmdShow {
 	my $file = shift;
 	my $md5 = file_md5_hex($file);
 	
@@ -249,7 +352,7 @@ sub show {
 }
 
 
-sub tag {
+sub cmdTag {
 	my $file = shift;
 	my @tags = @_;
 	my $oid;
@@ -334,4 +437,15 @@ sub date2dir {
 	my @times = localtime($date);
 	$times[5] += 1900;
 	return "$itemDir/$times[5]-$times[4]-$times[3]";
+};
+
+sub stop {
+	my $code;
+	if (scalar @_ >1) {
+		$code = pop;
+	} else {
+		$code = 1;
+	}
+	print @_, "\n";
+	exit $code;
 }
