@@ -187,16 +187,16 @@ sub createObjectList {
 	#	2) if we QUERY database, we use fles as source for hash computation and add them to hash array. If
 	#		such hash is absend in database, hash handling code returns error or jus continue, depending of
 	#		--ignore switch presense
-	foreach $fName (@{$config{file}}) {
+	foreach my $fName (@{$config{file}}) {
 		unless (-f $fName) {
-			next if ($config{ignore};
+			next if ($config{ignore});
 			stop("File not found: $fName", 2);
 		}
 		my $hash = file_md5_hex($fName);
 		my $row = findObjects('hash', $hash);
 		if ($commands{$cmd}->{unsafe}) {
 			if ($row != NOT_FOUND) {
-				if ($config{ignore} {
+				if ($config{ignore}) {
 					push @{$config{hash}}, $hash;
 				} else {
 					stop("File $fName already exists in database. Use --ignore switch to process command with it", 2);
@@ -214,16 +214,18 @@ sub createObjectList {
 
 	foreach my $hash (@{$config{hash}}) {
 		$arr = findObjects('hash', $hash, \@objectList);
-		if ($arr == SQL_ERROR)
+		if ($arr == SQL_ERROR) {
 			return SQL_ERROR;
+		}
 		stop("There is no such object: $hash", 2) if ($arr == NOT_FOUND && !$config{ignore});
 	}
-	foreach $type('hash', 'name', 'source') {
-		foreach my $value (@{$config{$value}}) {
+	foreach my $type(('hash', 'name', 'source')) {
+		foreach my $value (@{$config{$type}}) {
 			$arr = findObjects($type, $value, \@objectList);
-			if ($arr == SQL_ERROR)
+			if ($arr == SQL_ERROR) {
 				return SQL_ERROR;
-			stop("There is no such object: $hash", 2) if ($arr == NOT_FOUND && !$config{ignore});
+			}
+			stop("There is no such object: $value", 2) if ($arr == NOT_FOUND && !$config{ignore});
 		}
 	}
 }
@@ -273,7 +275,7 @@ sub getTagsObjects {
 		my $tagContent = listTagContent($tag, $results);
 		stop("Internal Error", 2) if ($tagContent == SQL_ERROR);
 	}
-	hashMerge $objects, $results if $objects;
+	hashMerge($objects, $results) if $objects;
 	return $results;
 }
 
@@ -295,7 +297,7 @@ sub extractList{
 	my $objects = shift;
 	my $exportFunc = shift;
 	while (my ($hash, $objInfo) = each %$objects) {
-		my $path = addtime2dir($objInfo->{addtime}) . "/$hash";
+		my $path = hash2dir($objInfo->{hash}) . "/$hash";
 		# TODO: hackish - need to handle URLs
 		my (undef, undef, $fName) = File::Spec->splitpath($objInfo->{source});
 		my ($name, $ext);
@@ -329,7 +331,7 @@ sub listTagContent {
 	my $objects;
 	if (@_) {
 		#if we have second arg, it's ref to hash where we must append results
-		$obejcts = shift;
+		$objects = shift;
 	} else {
 		$objects = {};
 	}
@@ -342,7 +344,7 @@ sub listTagContent {
 		$result->{$row->{hash}} = $row;
 	}
 	return NOT_FOUND unless (%$result);
-	hashMerge $objects, $result if ($objects);
+	hashMerge($objects, $result) if ($objects);
 	return $result;
 }
 
@@ -350,7 +352,12 @@ sub listTagContent {
 sub hashMerge {
 	return undef unless @_;
 	my $main = shift;
-	$main->{$k} = $v while (my ($k, $v) = each(%$hash)) foreach my $hash (@_);
+	foreach my $hash (@_) {
+		while (my ($k, $v) = each(%$hash)) {
+			$main->{$k} = $v;
+		}
+	}
+	
 	return $main;
 }
 
@@ -409,14 +416,14 @@ sub cmdShow {
 
 
 sub grabObject {
-	my ($fName, $hash) = @_;
+	my ($file, $hash) = @_;
 
 #	create date-named dir
 	my $time = time();
-	my $dirName = addtime2dir($time);
+	my $dirName = hash2dir($hash);
 	mkdir $dirName;
 
-# split filename to parts
+	# split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
 
 	# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
@@ -426,34 +433,34 @@ sub grabObject {
 		#if we cannot copy, abort
 		return FS_ERROR unless ($result);
 	}
+	#	store in db: did	hash	external_filename	add_time
+	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, addtime) VALUES (?, ?, ?, ?)");
+	unless ($sth->execute($hash, $file, $fName, $time)) {
+		return SQL_ERROR;
+	}
+	my $oid = $dbh->func('last_insert_rowid');
+
 }
 
 sub cmdTag {
-	my $file = shift;
-	my @tags = @_;
+	my @oids;
 	my $oid;
-	my $time = time();
-	while(my ($file, $hash) = each %{$config{files_checked}) {
-		grabObject($file, $hash);
-	}
-######### TODO: move file-import-to-DB-related code into grabObject, leave there only tagging
-	my ($vol, $path, $fName) = File::Spec->splitpath($file);
-	$fName = File::Spec->rel2abs($file));
 	$dbh->do("BEGIN TRANSACTION");
-#	store in db: did	hash	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, addtime) VALUES (?, ?, ?, ?)");
-	unless ($sth->execute($hash, $file, $fName, $time)) {
-		$dbh->do("ROLLBACK TRANSACTION");
-		return SQL_ERROR;
+	while(my ($file, $hash) = each %{$config{files_checked}}) {
+		$oid = grabObject($file, $hash);
+		unless ($oid > 0) {
+			$dbh->do("ROLLBACK TRANSACTION");
+			stop("Error while importing $file", 3);
+		}
+		push @oids, $oid;
 	}
-	$oid = $dbh->func('last_insert_rowid');
 	my @tids;
 	my $tid;
-	foreach my $tag (@tags) {
-		$sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
+	my $sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
+	foreach my $tag (@{$config{tags}}) {
 		unless ($sth->execute($tag)) {
 			$dbh->do("ROLLBACK TRANSACTION");
-			return SQL_ERROR;
+			stop("Error while adding tag $tag", 3);
 		} else {
 			$tid = $dbh->func('last_insert_rowid');
 		}
@@ -461,23 +468,16 @@ sub cmdTag {
 
 	}
 #	store in db for each new tag: tid	tagname;	did	tid
-	
-	foreach $tid (@tids) {
-		$sth = $dbh->prepare("INSERT INTO links (oid, tid) VALUES (?, ?)");
+	$sth = $dbh->prepare("INSERT INTO links (oid, tid) VALUES (?, ?)");
+	foreach my $oid(@oids) {
+		foreach $tid (@tids) {
 			unless ($sth->execute($oid, $tid)) {
 				$dbh->do("ROLLBACK TRANSACTION");
-				return SQL_ERROR;
+				stop("Error while tagging object", 3);
 			}
+		}
 	}
 	$dbh->do("COMMIT TRANSACTION");
-	
-
-
-}
-
-
-sub saveObject{
-
 }
 
 sub findObjects{
@@ -489,8 +489,9 @@ sub findObjects{
 	# ref to hash to add result (optional)
 	# returns ref to hash: $hash => $row
 	my $objects;
-	if (@_)
+	if (@_) {
 		$objects = shift;
+	}
 	my %results;
 	my $sth = $dbh->prepare("SELECT * FROM objects WHERE $field=?");
 	unless ($sth->execute($value)) {
@@ -505,11 +506,10 @@ sub findObjects{
 	return \%results;
 }
 
-sub addtime2dir {
-	my  $addtime = shift;
-	my @times = localtime($addtime);
-	$times[5] += 1900;
-	return "$itemDir/$times[5]-$times[4]-$times[3]";
+sub hash2dir {
+	my  $hash = shift;
+	my $prefix = substr $hash, 0, 2;
+	return "$itemDir/$prefix";
 };
 
 sub stop {
