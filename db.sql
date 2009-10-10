@@ -1,10 +1,10 @@
 BEGIN TRANSACTION;
 CREATE TABLE objects (
 oid INTEGER PRIMARY KEY asc,
-md5 TEXT UNIQUE, 
+hash TEXT UNIQUE, 
 source TEXT,
 addtime INTEGER, 
-title TEXT, 
+name TEXT, 
 description TEXT);
 CREATE TABLE tags (
 tid INTEGER PRIMARY KEY asc,

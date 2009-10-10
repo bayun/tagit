@@ -22,7 +22,7 @@ my $dbName = "$dataDir/base.sqlite";
 # 9) TODO: add URL handling: retrieve, store & tag page
 #10) TODO: object relations. mytag tie object1 object2
 
-# TODO:
+#:
 # where stored object used as argument, use identification by:
 #	-h (--hash)		- content hash (default)
 #	-n (--name)		- object name
@@ -33,13 +33,11 @@ my $dbName = "$dataDir/base.sqlite";
 # unsafe operations with multiple objects can be forced with
 #	-F (--force)	- allow unsafe operations
 #
-# Also we need two behaviors when user tryes to add object that already exists in database.
+# Also we have two behaviors when user tryes to add object that already exists in database.
 # defaut variant: message "Object XXX already exists" and return code 11
 #	-i (--ignore)	- just skip object addition and proceed requested operation
 # for `tag' command we can also add
 #	-c (--copy)		- always copy content, don't try to create a hardlink
-# we have also two behavior variants on nonfatal errors, like if one of
-# given objects not found, so we have switch:
 
 
 use constant SQLITE_ERROR     =>   1;   # SQL error or missing database
@@ -165,21 +163,18 @@ if (@ARGV) {
 	stop("You must give a command", 1);
 }
 stop("Invalid command", 1) unless exists $commands{$cmd};
-if ($commands{$cmd}->{objects}) {
-	$objectList = createObjectList();
-}
-# add onprocessed arguments into config-defined list: tags, file, hash etc
+# add unprocessed arguments into config-defined list: tags, file, hash etc
 if (@ARGV) {
 	push @{$config{$commands{$cmd}->{args}}}, @ARGV;
 }
-#commands{$cmd}->func();
+if ($commands{$cmd}->{objects}) {
+	$objectList = createObjectList();
+}
 
-use Data::Dumper;
-
-print Dumper(\%config);
+$commands{$cmd}->{func}();
 
 sub createObjectList {
-	my @objectList;
+	my $objectList = {};
 	my $arr;
 	# we have 2 modes for 'file':
 	#	1) if we ADD files (unsafe=1), these files must NOT be in database (but we can ignore existence if
@@ -213,7 +208,7 @@ sub createObjectList {
 	}
 
 	foreach my $hash (@{$config{hash}}) {
-		$arr = findObjects('hash', $hash, \@objectList);
+		$arr = findObjects('hash', $hash, $objectList);
 		if ($arr == SQL_ERROR) {
 			return SQL_ERROR;
 		}
@@ -221,46 +216,14 @@ sub createObjectList {
 	}
 	foreach my $type(('hash', 'name', 'source')) {
 		foreach my $value (@{$config{$type}}) {
-			$arr = findObjects($type, $value, \@objectList);
+			$arr = findObjects($type, $value, $objectList);
 			if ($arr == SQL_ERROR) {
 				return SQL_ERROR;
 			}
 			stop("There is no such object: $value", 2) if ($arr == NOT_FOUND && !$config{ignore});
 		}
 	}
-}
-
-#parseArgs();
-
-
-
-
-sub parseArgs {
-	my $cmd;
-	my $tag;
-	unless (@ARGV) {
-		$cmd = 'help';
-	}
-	else {
-		$cmd = $ARGV[0];
-		shift @ARGV;
-	}
-	if ($cmd eq 'tag') {
-		my @tags;
-		GetOptions('tags=s{1,1000}' => \@tags);
-		foreach my $file (@ARGV) {
-			#tag file
-			unless (-f $file) {
-				print STDERR "tagit: Not found or is not palin file: $file\n";
-				exit 1;
-			}
-			cmdTag(File::Spec->rel2abs($file), @tags);
-		}
-	} elsif ($cmd eq 'show') {
-		foreach my $file (@ARGV) {
-			cmdShow(File::Spec->rel2abs($file));
-		}
-	}
+	return $objectList;
 }
 
 
@@ -280,11 +243,11 @@ sub getTagsObjects {
 }
 
 sub cmdGet {
-	extractList(getTagsObjects($config{tags}), \&my_symlink);
+	map {extractList($_, \&my_symlink)} ($objectList, getTagsObjects($config{tags}));
 }
 
 sub cmdExport {
-	extractList(getTagsObjects($config{tags}), \&copy);
+	map {extractList($_, \&copy)} ($objectList, getTagsObjects($config{tags}));
 }
 
 sub my_symlink{
@@ -311,7 +274,7 @@ sub extractList{
 			++$i;
 			$fName = "$name($i).$ext";
 		}
-		print STDERR "Cannot create symlink $fName to $path for $objInfo->{title}\n" unless ($exportFunc->($path, $fName));
+		print STDERR "Cannot create symlink $fName to $path for $objInfo->{name}\n" unless ($exportFunc->($path, $fName));
 	}
 }
 
@@ -364,7 +327,7 @@ sub hashMerge {
 sub getObjectInfo {
 	my $hash = shift;
 	my $result;
-	my $sth = $dbh->prepare("SELECT hash, source, addtime, title, description FROM objects WHERE hash=?");
+	my $sth = $dbh->prepare("SELECT hash, source, addtime, name, description FROM objects WHERE hash=?");
 	return SQL_ERROR unless ($sth->execute($hash));
 	return NOT_FOUND unless ($result = $sth->fetchrow_hashref());
 	return $result;
@@ -387,7 +350,7 @@ sub getObjectTags {
 	my $hash = shift;
 	my @tags;
 	my $sth = $dbh->prepare(
-		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
+		"SELECT tags.name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
 	return SQL_ERROR unless ($sth->execute($hash));
 	while (my $tagName = $sth->fetchrow_array) {
 		push @tags, $tagName;
@@ -395,29 +358,23 @@ sub getObjectTags {
 	return \@tags;
 }
 sub cmdShow {
+# TODO: add different output formats
 	while (my ($hash, $row) = each(%$objectList)) {
 		my $tags = getObjectTags($hash);
-
+		print "$hash:";
+		my $i = 0;
+		foreach my $tag (@$tags) {
+			print ',' if ($i++);
+			print " $tag";
+		}
+		print "\n";
 	}
-	my $file = shift;
-	my $hash = file_md5_hex($file);
-	
-	my $sth = $dbh->prepare(
-		"SELECT name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
-	return SQL_ERROR unless ($sth->execute($hash));
-	print "$hash:";
-	my $i = 0;
-	while (my $tag = $sth->fetchrow_array) {
-		print ',' if ($i++);
-		print " $tag";
-	}
-	print "\n";
 }
 
 
 sub grabObject {
 	my ($file, $hash) = @_;
-
+#TODO: refactor to accept URLs
 #	create date-named dir
 	my $time = time();
 	my $dirName = hash2dir($hash);
@@ -434,15 +391,18 @@ sub grabObject {
 		return FS_ERROR unless ($result);
 	}
 	#	store in db: did	hash	external_filename	add_time
-	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, title, addtime) VALUES (?, ?, ?, ?)");
+	$file = File::Spec->rel2abs($file);
+	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, name, addtime) VALUES (?, ?, ?, ?)");
 	unless ($sth->execute($hash, $file, $fName, $time)) {
 		return SQL_ERROR;
 	}
 	my $oid = $dbh->func('last_insert_rowid');
-
 }
 
 sub cmdTag {
+	unless (scalar @{$config{tags}}) {
+		stop("Please, enter at least one tag (after --tags switch) to tag with", 1);
+	}
 	my @oids;
 	my $oid;
 	$dbh->do("BEGIN TRANSACTION");
@@ -481,7 +441,7 @@ sub cmdTag {
 }
 
 sub findObjects{
-	# field to search - reasonable variants are: oid, hash, title. Possible also source, addtime and description, 
+	# field to search - reasonable variants are: oid, hash, name. Possible also source, addtime and description, 
 	# but these fields are not indexed
 	my $field = shift;
 	# value to search
@@ -499,7 +459,7 @@ sub findObjects{
 	};
 	my $row;
 	while ($row = $sth->fetchrow_hashref()) {
-		results{$row->{hash}} = $row;
+		$results{$row->{hash}} = $row;
 	}
 	return NOT_FOUND if (!%results);
 	hashMerge $objects, \%results if ($objects);

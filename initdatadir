@@ -1,0 +1,5 @@
+#!/bin/sh
+
+mkdir ~/.local/share/tagit
+sqlite3 ~/.local/share/tagit/base.sqlite <db.sql
+mkdir ~/.local/share/tagit/items

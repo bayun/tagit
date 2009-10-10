@@ -1,0 +1,8 @@
+What we need to implement
+ * useful and configurable output format of object details
+ * ways to alter object's name and source
+ * removing object from tags
+ * implement extended attributes - for example, 'author'.
+ * set arithmetics ("give me all objects that are contained in tags a AND b", etc)
+ * support for URLs
+ * attaches - objects that are "childs of" or "supplement" some object. These objects can be tagged, but not always will.
