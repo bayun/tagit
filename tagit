@@ -8,37 +8,8 @@ my $itemDir = "$dataDir/items";
 my $dbName = "$dataDir/base.sqlite";
 
 
-# 1)+tagit tag file1 [file2...] -t tag1[,tag2...]
-# 2)+tagit show filename
-# 3)+tagit list tag
-# 4)+tagit taglist
-# 5)+tagit get -t mytag [mytag2...]
-#	+tagit get object
-# 6)+tagit export mytag
-#	+tagit export -t mytag [mytag2...]
-# 7) TODO: tagit attach object file1 [file2...]
 # 7) TODO: tagit search term	- must search in CONTENT
 # 8) TODO: add VCS suport
-# 9) TODO: add URL handling: retrieve, store & tag page
-#10) TODO: object relations. mytag tie object1 object2
-
-#:
-# where stored object used as argument, use identification by:
-#	-h (--hash)		- content hash (default)
-#	-n (--name)		- object name
-#	-s (--source)	- source path
-#	-f (--file)		- file in user filesystem to compute hash and use it
-# --name and --source can point to multiple objects. In that case, where possible
-# and safe we  will use all. If it is unsafe we will return "Ambiguous argument" and code 10
-# unsafe operations with multiple objects can be forced with
-#	-F (--force)	- allow unsafe operations
-#
-# Also we have two behaviors when user tryes to add object that already exists in database.
-# defaut variant: message "Object XXX already exists" and return code 11
-#	-i (--ignore)	- just skip object addition and proceed requested operation
-# for `tag' command we can also add
-#	-c (--copy)		- always copy content, don't try to create a hardlink
-
 
 use constant SQLITE_ERROR     =>   1;   # SQL error or missing database
 use constant SQLITE_INTERNAL  =>   2;   # Internal logic error in SQLite
@@ -142,10 +113,17 @@ my %commands = (
 		unsafe	=> 1,
 		args	=> 'hash',
 	},
+	untag		=>{
+		objects => 1,
+		func	=> \&cmdUntag,
+		unsafe	=> 0,
+		args	=> 'hash',
+	},
+
 );
 
 my $cmd;
-my $objectList;
+my $objectList = [];
 GetOptions(
 	\%config,
 	'hash|h=s@{1,1000}',
@@ -289,6 +267,40 @@ sub cmdList {
 	}
 }
 
+
+sub arr2bind {
+	# create '?' for each array item
+	# for example, for ('a', 'b', 5) this will return '?, ?, ?';
+	my $arr = shift;
+	my $s = '?,' x @$arr;
+	chop $s;
+	return $s;
+}
+
+sub cmdUntag {
+	unless (scalar %$objectList) {
+#		stop("Please, enter at least one object (there are many ways to do htis - see man page)", 1);
+		return;
+	}
+	unless (scalar @{$config{tags}}) {
+#		stop("Please, enter at least one tag (after --tags switch)", 1);
+		return;
+	}
+
+	my $tagFilter =  'tags.name IN (' . arr2bind($config{tags}) . ')';
+	my @objects = keys %$objectList;
+	my $objFilter =  'objects.hash IN (' . arr2bind(\@objects) . ')';
+	my $filterSql = "SELECT lid FROM links INNER JOIN objects ON (links.oid=objects.oid) INNER JOIN tags ON (links.tid=tags.tid) WHERE $tagFilter AND $objFilter";
+	my $sql = "DELETE FROM links WHERE lid IN ($filterSql)";
+	$dbh->begin_work();
+	my $sth = $dbh->prepare($sql);
+	unless ($sth->execute(@{$config{tags}}, keys %$objectList)) {
+		$dbh->rollback();
+		stop("Error while untagging", 3);
+	};
+	$dbh->commit();
+}
+
 sub listTagContent {
 	my $tag = shift;
 	my $objects;
@@ -382,13 +394,16 @@ sub grabObject {
 
 	# split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
-
-	# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
-	if ($config{copy} || !link $file, "$dirName/$hash") {
-	# cannot create hardlink, so we need copy
-		my $result = copy $file, "$dirName/$hash";
-		#if we cannot copy, abort
-		return FS_ERROR unless ($result);
+	unless (-f "$dirName/$hash") {
+		# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
+		if ($config{copy} || !link $file, "$dirName/$hash") {
+		# cannot create hardlink, so we need copy
+			my $result = copy $file, "$dirName/$hash";
+			#if we cannot copy, abort
+			return FS_ERROR unless ($result);
+		}
+	} else {
+		stop("File $file already exists and this condition not catched  - error in program!",3) unless $config{ignore};
 	}
 	#	store in db: did	hash	external_filename	add_time
 	$file = File::Spec->rel2abs($file);
@@ -416,8 +431,23 @@ sub cmdTag {
 	}
 	my @tids;
 	my $tid;
-	my $sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
-	foreach my $tag (@{$config{tags}}) {
+	my $tag;
+	my %tags;
+
+	my $tagFilter = arr2bind($config{tags});
+	my $sth = $dbh->prepare("SELECT tid, name FROM tags WHERE name IN ($tagFilter)");
+	print "tagFilter = $tagFilter; tags count: ". scalar @{$config{tags}} ."\n";
+	unless ($sth->execute(@{$config{tags}})) {
+		$dbh->do("ROLLBACK TRANSACTION");
+		stop("Error while getting tags info from database", 3);
+	} else {
+		while (($tid, $tag) = $sth->fetchrow_array) {
+			$tags{$tag} = $tid;
+		}
+	}
+	$sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
+	foreach $tag (@{$config{tags}}) {
+		next if exists ($tags{$tag});
 		unless ($sth->execute($tag)) {
 			$dbh->do("ROLLBACK TRANSACTION");
 			stop("Error while adding tag $tag", 3);
