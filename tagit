@@ -80,7 +80,7 @@ my %outputVariants = (
 	'name'			=> 'name',
 	'source'		=> 'source',
 	'description'	=> 'description',
-	'addtime'		=> 'addtime',
+	'addtime'		=> \&printTime,
 );
 
 my @defaultOutputFormat = ('hash', 'name');
@@ -253,7 +253,11 @@ sub createObjectOutput {
 	my $objectInfo = shift;
 	my @values;
 	for my $field (@{$config{output}}) {
-		push @values, $objectInfo->{$field};
+		if (ref($outputVariants{$field}) eq 'CODE') {
+			push @values, &{$outputVariants{$field}}($objectInfo);
+		} else {
+			push @values, $objectInfo->{$outputVariants{$field}};
+		}
 	}
 	return \@values;
 }
@@ -264,6 +268,11 @@ sub printArray {
 	print $start if defined $start;
 	print join($delim, @$row);
 	print $end if defined $end;
+}
+
+sub printTime {
+	my $objectInfo = shift;
+	return scalar localtime($objectInfo->{addtime});
 }
 
 sub cmdGet {
