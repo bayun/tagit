@@ -60,12 +60,15 @@ my $dbh = DBI->connect($base,"","",
 	}
 );
 
+# configuration array. It will be filled by GetOptions.
+# It is initialized there to disable warnings about uninitialized variables
+
 my %config = (	tags	=> [], 
 				name	=> [],
 				source	=> [],
 				file	=> [],
 				hash	=> [],
-				set		=> {},
+				set		=> undef,
 				output	=> undef,
 				force	=> 0,
 				copy	=> 0,
@@ -75,15 +78,25 @@ my %config = (	tags	=> [],
 
 
 # What arguments are allowed for --output switch and to what database fields they are mapped.
-# TODO: add closures as values, i.e. to format date
-# closure receives ref to hash with all values and must return value to output
+# if value for some ker is code ref, it will be called to print this field. This
+# code receives ref to hash with all values and must return value to output
 
 my %outputVariants = (
-	'hash'			=> 'hash',
-	'name'			=> 'name',
-	'source'		=> 'source',
-	'description'	=> 'description',
-	'addtime'		=> \&printTime,
+	hash		=> 'hash',
+	name		=> 'name',
+	source		=> 'source',
+	description	=> 'description',
+	addtime		=> \&printTime,
+);
+
+# What object properties user is allowe to change with 'modify' command
+# TODO: add code refs (similar to outputVariants) to convert user-supplied
+# values into somesing else.
+
+my %modifyVariants = (
+	name		=> 'name',
+	source		=> 'source',
+	description	=> 'description',
 );
 
 my @defaultOutputFormat = ('hash', 'name');
@@ -156,6 +169,7 @@ my %commands = (
 
 );
 
+#list all possible switches. Each commands defines own list of needed switches
 my %possibleSwitches = (
 hash	=> 'hash|h=s@{1,1000}',
 name 	=> 'name|n=s@{1,1000}',
@@ -186,6 +200,7 @@ stop("Invalid command", 1) unless exists $commands{$cmd};
 
 my @options = (\%config);
 {
+# create option list for current command
 	my $params = $commands{$cmd};
 	my $sa = $params->{switchesAllowed};
 	for my $switch (@$sa) {
@@ -195,13 +210,11 @@ my @options = (\%config);
 
 stop("",1) unless GetOptions(@options);
 
-use Data::Dumper; print Dumper(\%config); exit;
-
 #check --output arguments
 
 if ($config{output}) {
 	foreach my $field(@{$config{output}}) {
-		stop("Invalid field in --output", 1) unless exists $outputVariants{$field};
+		stop("Invalid field in --output: $field", 1) unless exists $outputVariants{$field};
 	}
 } else {
 	$config{output} = [@defaultOutputFormat];
@@ -466,12 +479,14 @@ sub getObjectTags {
 sub cmdShow {
 # TODO: add different output formats
 	while (my ($hash, $row) = each(%$objectList)) {
+
+		my $arr = createObjectOutput($row);
+		printArray($arr, "\t", "", ":\t");
 		my $tags = getObjectTags($hash);
-		print "$hash:";
 		my $i = 0;
 		foreach my $tag (@$tags) {
-			my $arr = createObjectOutput($row);
-			printArray($arr, "\t", "", "\n");
+			print ', ' if ($i++);
+			print $tag;
 		}
 		print "\n";
 	}
@@ -562,6 +577,32 @@ sub cmdTag {
 		}
 	}
 	$dbh->do("COMMIT TRANSACTION");
+}
+
+
+sub cmdModify {
+	stop ("You need to supply at least one object to modify", 1) unless ($objectList);
+	stop ("You need to supply at least one object property to modify") unless (%{$config{set}});
+	# check, if object properties are allowed to modify
+	while (my($key, undef) = each %{$config{set}}) {
+		stop("Invalid object property in --set: $key", 1) unless exists $modifyVariants{$key};
+	}
+	my $pairs = "";
+	my @values;
+	while (my($key, $value) = each %{$config{set}}) {
+		$pairs .= ' ' . $modifyVariants{$key} . '=?,';
+		push @values, $value;
+	}
+	chop $pairs;
+	my $sth = $dbh->prepare("UPDATE objects SET $pairs WHERE oid=?");
+	$dbh->begin_work();
+	while (my ($hash, $row) = each %$objectList) {
+		unless($sth->execute(@values, $row->{oid})) {
+			$dbh->rollback();
+			stop("Error while processing $hash ($row->{name}", 3);
+		}
+	}
+	$dbh->commit();
 }
 
 sub findObjects{
