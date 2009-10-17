@@ -8,7 +8,7 @@ name TEXT,
 description TEXT);
 CREATE TABLE tags (
 tid INTEGER PRIMARY KEY asc,
-name TEXT);
+name TEXT UNIQUE);
 CREATE TABLE links (
 lid INTEGER PRIMARY KEY asc,
 oid INTEGER NOT NULL,
