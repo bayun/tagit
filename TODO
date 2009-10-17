@@ -4,4 +4,3 @@ What we need to implement
  * set arithmetics ("give me all objects that are contained in tags a AND b", etc)
  * support for URLs
  * attaches - objects that are "childs of" or "supplement" some object. These objects can be tagged, but not always will.
- * add checking for allowed switches for each command

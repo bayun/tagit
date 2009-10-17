@@ -65,11 +65,14 @@ my %config = (	tags	=> [],
 				source	=> [],
 				file	=> [],
 				hash	=> [],
+				set		=> {},
 				output	=> undef,
 				force	=> 0,
 				copy	=> 0,
 				ignore	=> 0,
 	);
+
+
 
 # What arguments are allowed for --output switch and to what database fields they are mapped.
 # TODO: add closures as values, i.e. to format date
@@ -91,72 +94,108 @@ my %commands = (
 		func	=> \&cmdTag,
 		unsafe	=> 1,
 		args	=> 'file',
+		switchesAllowed => [qw(tags name source file hash copy ignore)],
 	},
 	show	=>{
 		objects => 1,
 		func	=> \&cmdShow,
 		unsafe	=> 0,
 		args	=> 'hash',
+		switchesAllowed => [qw(name source file hash output ignore)],
 	},
 	list	=>{
 		objects => 0,
 		func	=> \&cmdList,
 		unsafe	=> 0,
 		args	=> 'tags',
+		switchesAllowed => [qw(tags output)],
 	},
 	taglist	=>{
 		objects => 0,
 		func	=> \&cmdTaglist,
 		unsafe	=> 0,
 		args	=> '',
+		switchesAllowed => [],
 	},
 	get		=>{
 		objects => 1,
 		func	=> \&cmdGet,
 		unsafe	=> 0,
 		args	=> 'hash',
+		switchesAllowed => [qw(tags name source file hash ignore)],
 	},
 	export	=>{
 		objects => 1,
 		func	=> \&cmdExport,
 		unsafe	=> 0,
 		args	=> 'hash',
+		switchesAllowed => [qw(tags name source file hash ignore)],
 	},
 	attach	=>{
 		objects => 1,
 		func	=> \&cmdAttach,
 		unsafe	=> 1,
 		args	=> 'hash',
+# TODO: fix allowed switches list - remove unneeded
+		switchesAllowed => [qw(tags name source file hash output force copy ignore)],
 	},
 	untag		=>{
 		objects => 1,
 		func	=> \&cmdUntag,
 		unsafe	=> 0,
 		args	=> 'hash',
+		switchesAllowed => [qw(tags name source file hash ignore)],
+	},
+	modify	=>{
+		objects	=> 1,
+		func	=> \&cmdModify,
+		unsafe	=> 0,
+		args	=> 'hash',
+		switchesAllowed => [qw(set name source file hash ignore)],
 	},
 
 );
 
+my %possibleSwitches = (
+hash	=> 'hash|h=s@{1,1000}',
+name 	=> 'name|n=s@{1,1000}',
+source	=> 'source|s=s@{1,1000}',
+file	=> 'file|f=s@{1,1000}',
+tags	=> 'tags|t=s@{1,1000}',
+set		=> 'set|S=s%{1,1000}',
+# output formats
+output	=> 'output|o=s@{1,1000}',
+# switches to alter behavior
+force	=> 'force|F',
+copy	=> 'copy|c',
+ignore	=> 'ignore|i',
+);
+
+
 my $cmd;
 my $objectList = [];
-GetOptions(
-	\%config,
-	'hash|h=s@{1,1000}',
-	'name|n=s@{1,1000}',
-	'source|s=s@{1,1000}',
-	'file|f=s@{1,1000}',
-	'tags|t=s@{1,1000}',
-	'output|o=s@{1,1000}',
-	'force|F',
-	'copy|c',
-	'ignore|i',
-);
+
+
 if (@ARGV) {
 	$cmd = shift;
 } else {
 	stop("You must give a command", 1);
 }
 stop("Invalid command", 1) unless exists $commands{$cmd};
+
+
+my @options = (\%config);
+{
+	my $params = $commands{$cmd};
+	my $sa = $params->{switchesAllowed};
+	for my $switch (@$sa) {
+		push @options, $possibleSwitches{$switch};
+	}
+}
+
+stop("",1) unless GetOptions(@options);
+
+use Data::Dumper; print Dumper(\%config); exit;
 
 #check --output arguments
 
@@ -316,7 +355,6 @@ sub cmdList {
 	my $files = getTagsObjects($config{tags});
 # TODO: decide, if I need to show error 'tag not found', or just show empty tag
 	return $files unless (ref $files);
-# TODO:	add option to change output format
 	while (my ($hash, $row) = each(%$files)) {
 		my $arr = createObjectOutput($row);
 		printArray($arr, "\t", "", "\n");
