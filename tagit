@@ -65,10 +65,25 @@ my %config = (	tags	=> [],
 				source	=> [],
 				file	=> [],
 				hash	=> [],
+				output	=> undef,
 				force	=> 0,
 				copy	=> 0,
 				ignore	=> 0,
 	);
+
+# What arguments are allowed for --output switch and to what database fields they are mapped.
+# TODO: add closures as values, i.e. to format date
+# closure receives ref to hash with all values and must return value to output
+
+my %outputVariants = (
+	'hash'			=> 'hash',
+	'name'			=> 'name',
+	'source'		=> 'source',
+	'description'	=> 'description',
+	'addtime'		=> 'addtime',
+);
+
+my @defaultOutputFormat = ('hash', 'name');
 
 my %commands = (
 	tag		=>{
@@ -131,6 +146,7 @@ GetOptions(
 	'source|s=s@{1,1000}',
 	'file|f=s@{1,1000}',
 	'tags|t=s@{1,1000}',
+	'output|o=s@{1,1000}',
 	'force|F',
 	'copy|c',
 	'ignore|i',
@@ -141,6 +157,17 @@ if (@ARGV) {
 	stop("You must give a command", 1);
 }
 stop("Invalid command", 1) unless exists $commands{$cmd};
+
+#check --output arguments
+
+if ($config{output}) {
+	foreach my $field(@{$config{output}}) {
+		stop("Invalid field in --output", 1) unless exists $outputVariants{$field};
+	}
+} else {
+	$config{output} = [@defaultOutputFormat];
+}
+
 # add unprocessed arguments into config-defined list: tags, file, hash etc
 if (@ARGV) {
 	push @{$config{$commands{$cmd}->{args}}}, @ARGV;
@@ -220,6 +247,25 @@ sub getTagsObjects {
 	return $results;
 }
 
+
+sub createObjectOutput {
+	# arg is ref to hash with object properties
+	my $objectInfo = shift;
+	my @values;
+	for my $field (@{$config{output}}) {
+		push @values, $objectInfo->{$field};
+	}
+	return \@values;
+}
+
+sub printArray {
+	# at least $row and $delim must be passed
+	my ($row, $delim, $start, $end) = @_;
+	print $start if defined $start;
+	print join($delim, @$row);
+	print $end if defined $end;
+}
+
 sub cmdGet {
 	map {extractList($_, \&my_symlink)} ($objectList, getTagsObjects($config{tags}));
 }
@@ -263,7 +309,8 @@ sub cmdList {
 	return $files unless (ref $files);
 # TODO:	add option to change output format
 	while (my ($hash, $row) = each(%$files)) {
-		print "$row->{hash}: $row->{source}\n";
+		my $arr = createObjectOutput($row);
+		printArray($arr, "\t", "", "\n");
 	}
 }
 
@@ -376,8 +423,8 @@ sub cmdShow {
 		print "$hash:";
 		my $i = 0;
 		foreach my $tag (@$tags) {
-			print ',' if ($i++);
-			print " $tag";
+			my $arr = createObjectOutput($row);
+			printArray($arr, "\t", "", "\n");
 		}
 		print "\n";
 	}

@@ -108,10 +108,46 @@ hash and do semething with INTERNAL objects with this hash.
 
 Requires to always copy imported file and do not try to create a hardlink to it
 
-=item --ignore
+=item --ignore (-i)
 
 Allows to ignore non-fatal errors like non-existent tags or hashes (program will just skip them) and allows
 to add tags to already imported files.
+
+=item --output (-o) field [filed...]
+
+Sets output format for 'show' and 'list' commands. Possible field values:
+
+=over
+
+=item name
+
+Object name
+
+=item hash
+
+Object hash
+
+=item source
+
+Object source - local path for file (where it was grabbed from), URL for web page
+
+=item description
+
+Object descrption. This field can be large (and, possible, in multiple lines)
+
+=begin comment
+
+=item attaches
+
+Objects that are attached to current object via 'attach' command. What information will be shown can be configured via L<--attach-output> switch
+
+=end comment
+
+=item addtime
+
+Time when object was addded to database
+
+=back
 
 =back
 
