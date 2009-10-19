@@ -545,7 +545,6 @@ sub cmdTag {
 
 	my $tagFilter = arr2bind($config{tags});
 	my $sth = $dbh->prepare("SELECT tid, name FROM tags WHERE name IN ($tagFilter)");
-	print "tagFilter = $tagFilter; tags count: ". scalar @{$config{tags}} ."\n";
 	unless ($sth->execute(@{$config{tags}})) {
 		$dbh->do("ROLLBACK TRANSACTION");
 		stop("Error while getting tags info from database", 3);
@@ -581,25 +580,62 @@ sub cmdTag {
 
 
 sub cmdModify {
-	stop ("You need to supply at least one object to modify", 1) unless ($objectList);
+	stop ("You need to supply at least one object to modify", 1) unless (%$objectList);
 	stop ("You need to supply at least one object property to modify") unless (%{$config{set}});
 	# check, if object properties are allowed to modify
-	while (my($key, undef) = each %{$config{set}}) {
-		stop("Invalid object property in --set: $key", 1) unless exists $modifyVariants{$key};
-	}
-	my $pairs = "";
-	my @values;
+	my @basic; 	#basic attributes
+	my @attr_del;	#empty extended attributes - delete them
+	my @attrs;		#non-empty extended attributes - create or update them
 	while (my($key, $value) = each %{$config{set}}) {
-		$pairs .= ' ' . $modifyVariants{$key} . '=?,';
-		push @values, $value;
+		if (exists $modifyVariants{$key}) {
+			push @basic, $key;
+			next;
+		}
+		if ($value eq '') {
+			push @attr_del, $key;
+		} else {
+			push @attrs, $key;
+		} 
 	}
-	chop $pairs;
-	my $sth = $dbh->prepare("UPDATE objects SET $pairs WHERE oid=?");
 	$dbh->begin_work();
-	while (my ($hash, $row) = each %$objectList) {
-		unless($sth->execute(@values, $row->{oid})) {
+	#create SQL to handle all objects in one SQL statement
+	my @objects = values %$objectList;
+	my $objFilter = arr2bind(\@objects);
+	$objFilter = "oid IN ($objFilter)";
+	my @oids = map {$_->{oid}} @objects;
+
+	#process basic attributes (stored in 'objects' table
+	if (@basic) {
+		my $pairs = "";
+		my @values;
+		for my $attr (@basic) {
+			$pairs .= ' ' . $modifyVariants{$attr} . '=?,';
+			push @values, $config{set}->{$attr};
+		}
+		chop $pairs;
+		my $sth = $dbh->prepare("UPDATE objects SET $pairs WHERE $objFilter");
+		unless($sth->execute(@values, @oids)) {
 			$dbh->rollback();
-			stop("Error while processing $hash ($row->{name}", 3);
+			stop("Error while updating basic attributes", 3);
+		}
+	}
+	#process extended attributes (stored in 'attrs' table): 
+	#first delete empty
+	my $attrFilter = arr2bind(\@attr_del);
+	my $sth = $dbh->prepare("DELETE FROM attrs WHERE $objFilter AND name IN ($attrFilter)");
+	unless($sth->execute(@oids, @attr_del)) {
+		$dbh->rollback();
+		stop("Error while deleting extended attributes", 3);
+	}
+
+	#now set non-empty
+	$sth = $dbh->prepare("INSERT OR REPLACE INTO attrs (oid, name, value) VALUES (?, ?, ?)");
+	foreach my $oid(@oids) {
+		foreach my $attr(@attrs) {
+			unless($sth->execute($oid, $attr, $config{set}->{$attr})) {
+				$dbh->rollback();
+				stop("Error while updating extended attribute $attr for file with id $oid", 3);
+			}
 		}
 	}
 	$dbh->commit();
