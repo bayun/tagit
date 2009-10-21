@@ -73,6 +73,7 @@ my %config = (	tags	=> [],
 				force	=> 0,
 				copy	=> 0,
 				ignore	=> 0,
+				human	=> 0,
 	);
 
 
@@ -87,6 +88,7 @@ my %outputVariants = (
 	source		=> 'source',
 	description	=> 'description',
 	addtime		=> \&printTime,
+	attributes	=> \&printAttributes,
 );
 
 # What object properties user is allowe to change with 'modify' command
@@ -114,7 +116,7 @@ my %commands = (
 		func	=> \&cmdShow,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(name source file hash output ignore)],
+		switchesAllowed => [qw(name source file hash output ignore human)],
 	},
 	list	=>{
 		objects => 0,
@@ -183,6 +185,7 @@ output	=> 'output|o=s@{1,1000}',
 force	=> 'force|F',
 copy	=> 'copy|c',
 ignore	=> 'ignore|i',
+human	=> 'human|H',
 );
 
 
@@ -325,6 +328,20 @@ sub printArray {
 sub printTime {
 	my $objectInfo = shift;
 	return scalar localtime($objectInfo->{addtime});
+}
+
+sub printAttributes {
+	my $objectInfo = shift;
+	my $attributes = findObjectAttributes($objectInfo->{oid});
+	my $delim = ($config{human}?"\n":", ");
+	my $result;
+	my $i = 0;
+	while(my ($key, $value) = each(%$attributes)) {
+		$result .= $delim if ($i++);
+		$result .="$key = $value";
+	}
+	$result .= $delim if ($config{human});
+	return $result;
 }
 
 sub cmdGet {
@@ -664,6 +681,22 @@ sub findObjects{
 	}
 	return NOT_FOUND if (!%results);
 	hashMerge $objects, \%results if ($objects);
+	return \%results;
+}
+
+sub findObjectAttributes{
+	# oid of object
+	my $value = shift;
+	my $sql = "SELECT name, value FROM attrs WHERE oid=?";
+	my %results;
+	my $sth = $dbh->prepare($sql);
+	unless ($sth->execute($value)) {
+		return SQL_ERROR;
+	};
+	my $row;
+	while ($row = $sth->fetchrow_hashref()) {
+		$results{$row->{name}} = $row->{value};
+	}
 	return \%results;
 }
 

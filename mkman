@@ -1,4 +1,4 @@
 #!/bin/sh
 
-pod2man READMY.pod >tagit.man
-pod2text READMY.pod >README
+pod2man README.pod >tagit.man
+pod2text README.pod >README

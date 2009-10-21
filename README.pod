@@ -1,0 +1,169 @@
+=head1
+NAME
+
+B<tagit> - program to maintain non-hierarchical (tag-oriented) information collection
+
+
+
+=head1
+SYNOPSIS
+
+B<tagit> B<tag> file1 [file2...] --tags tag1 [tag2...] [--name name1 [name2...]] [--source source1 [source2...]] [--hash hash1 [hash2...]]
+[--file file1 [file2...]]  [--ignore] [--copy]
+
+B<tagit> B<show> [hash1 hash2...] [--tags tag1 [tag2...]] [--name name1 [name2...]] [--source source1 [source2...]] [--hash hash1 [hash2...]]
+[--file file1 [file2...]] [--ignore]
+
+B<tagit> B<list> [tag1 tag2...] [--tags tag1 [tag2...]]
+
+B<tagit> B<taglist>
+
+B<tagit> B<get> [hash1 hash2...] [--tags tag1 [tag2...]] [--name name1 [name2...]] [--source source1 [source2...]] [--hash hash1 [hash2...]]
+[--file file1 [file2...]] [--ignore]
+
+B<tagit> B<export> [hash1 hash2...] [--tags tag1 [tag2...]] [--name name1 [name2...]] [--source source1 [source2...]] [--hash hash1 [hash2...]]
+[--file file1 [file2...]] [--ignore]
+
+B<tagit> B<modify> [hash1 hash2...] [--tags tag1 [tag2...]] [--name name1 [name2...]] [--source source1 [source2...]] [--hash hash1 [hash2...]]
+[--file file1 [file2...]] [--ignore] --set key1=[value1] [key2=[value2]...]
+
+
+=head1
+DESCRIPTION
+
+B<Tagit> created to organize any information pieces that you have - documents, bookmarks, saved web pages etc.
+All these B<objects> are tagged, and you can easily select contect with needed tags. 
+Also, this program saves not only meta-informaiton, but objects themselves. At tagging,
+all content is saved inside B<tagit> data directory, from where can by easily retrieved. This allows you to 
+use this program with minimal effort - you don't need to manage files by hands, just seed tagit with your
+content, and it will keep all information.
+
+
+
+=head1
+COMMANDS
+
+=over
+
+=item tag
+
+Imports given objects and tags them with given tags. You can add tags to already imported objects if you set 
+--ignore flag. When importing files, B<tagit> tries to create hardlink. This can be overridden by using --copy flag.
+
+=item show
+
+Shows different information about saved objects - their names, descriptions, tags, original source etc. Use
+appropriate flags to point what objects you need to show.
+
+=item list
+
+Lists objects that tagged with given tags. Tags are merged by "OR" rule (set union).
+
+=item taglist
+
+Shows all known tags
+
+=item get
+
+Creates symlinks to requested objects in current directory. If you given any tags, symlinks to all content of these tags
+will be created.
+
+=item export 
+
+Identical to B<L</get>>, but copies objects as files instead of symlink creation.
+
+=item modify
+
+Changes object's attributes. As usual, you have different way to select object to modify: by hash, name, source etc. Changed attributes must be given after L<--set> switch, as key=value pairs. If object already have such attribute, value will be replaced to new. You cannot set attribute with empty value. If empty value wag given (for example, --set author=), suh attribute will be deleted. 
+
+=back
+
+
+
+=head1
+OPTIONS
+
+=over
+
+=item --tags (-t) tag [tag...]
+
+Specifies one or several tags
+
+=item --hash (-h) hash [hash...]
+
+Every object internally identified by it's content hash (currently md5). This is B<only> way to unambiguously 
+point to objects. This switch allows you to give such hashes to point to objects you deal with. command L</show>
+cah show you these hashes.
+
+=item --name (-n) name [name...]
+Every object has a name. B<Several object can have identical names>. It is set to some resonable 
+default on initial import and can be modified with 'set' command (UNIMPLEMENTED). You can use this switch to point 
+to ALL objects with given name.
+
+=item --source (-s) source [source...]
+
+For every object it's initial source is saved for file it is a full path in filesystem, for web content - 
+URL. With this switch you can select objects with given source and do something with them. As with L</--name>, 
+B<There can be several objects with some source!>
+
+=item --file (-f) file [file...]
+
+Many commands can accept files. There are two main uses for the. First is obvious - 'tag' imports given file
+and saves information about it. If command operates with objects that are already imported, files used to compute
+hash and do semething with INTERNAL objects with this hash.
+
+=item --copy (-c)
+
+Requires to always copy imported file and do not try to create a hardlink to it
+
+=item --set (-S)
+
+Attributes to change or delete, given as key=value pairs. To delete attribute, set his value to empty string.
+
+=item --ignore (-i)
+
+Allows to ignore non-fatal errors like non-existent tags or hashes (program will just skip them) and allows
+to add tags to already imported files.
+
+=item --output (-o) field [filed...]
+
+Sets output format for 'show' and 'list' commands. Possible field values:
+
+=over
+
+=item name
+
+Object name
+
+=item hash
+
+Object hash
+
+=item source
+
+Object source - local path for file (where it was grabbed from), URL for web page
+
+=item description
+
+Object descrption. This field can be large (and, possible, in multiple lines)
+
+=item attributes
+
+Object's extended attributes
+
+=begin comment
+
+=item attaches
+
+Objects that are attached to current object via 'attach' command. What information will be shown can be configured via L<--attach-output> switch
+
+=end comment
+
+=item addtime
+
+Time when object was addded to database
+
+=back
+
+=back
+
