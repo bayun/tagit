@@ -68,6 +68,7 @@ my %config = (	tags	=> [],
 				source	=> [],
 				file	=> [],
 				hash	=> [],
+				oid		=> [],
 				set		=> undef,
 				output	=> undef,
 				force	=> 0,
@@ -109,14 +110,14 @@ my %commands = (
 		func	=> \&cmdTag,
 		unsafe	=> 1,
 		args	=> 'file',
-		switchesAllowed => [qw(tags name source file hash copy ignore)],
+		switchesAllowed => [qw(tags name source file hash oid copy ignore)],
 	},
 	show	=>{
 		objects => 1,
 		func	=> \&cmdShow,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(name source file hash output ignore human)],
+		switchesAllowed => [qw(name source file hash oid output ignore human)],
 	},
 	list	=>{
 		objects => 0,
@@ -137,14 +138,14 @@ my %commands = (
 		func	=> \&cmdGet,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(tags name source file hash ignore)],
+		switchesAllowed => [qw(tags name source file hash oid ignore)],
 	},
 	export	=>{
 		objects => 1,
 		func	=> \&cmdExport,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(tags name source file hash ignore)],
+		switchesAllowed => [qw(tags name source file hash oid ignore)],
 	},
 	attach	=>{
 		objects => 1,
@@ -152,28 +153,29 @@ my %commands = (
 		unsafe	=> 1,
 		args	=> 'hash',
 # TODO: fix allowed switches list - remove unneeded
-		switchesAllowed => [qw(tags name source file hash output force copy ignore)],
+		switchesAllowed => [qw(tags name source file hash oid output force copy ignore)],
 	},
 	untag		=>{
 		objects => 1,
 		func	=> \&cmdUntag,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(tags name source file hash ignore)],
+		switchesAllowed => [qw(tags name source file hash oid ignore)],
 	},
 	modify	=>{
 		objects	=> 1,
 		func	=> \&cmdModify,
 		unsafe	=> 0,
 		args	=> 'hash',
-		switchesAllowed => [qw(set name source file hash ignore)],
+		switchesAllowed => [qw(set name source file hash oid ignore)],
 	},
 
 );
 
 #list all possible switches. Each commands defines own list of needed switches
 my %possibleSwitches = (
-hash	=> 'hash|h=s@{1,1000}',
+oid		=> 'hash|h=s@{1,1000}',
+hash	=> 'oid=s@{1,1000}',
 name 	=> 'name|n=s@{1,1000}',
 source	=> 'source|s=s@{1,1000}',
 file	=> 'file|f=s@{1,1000}',
@@ -252,7 +254,7 @@ sub createObjectList {
 		if ($commands{$cmd}->{unsafe}) {
 			if ($row != NOT_FOUND) {
 				if ($config{ignore}) {
-					push @{$config{hash}}, $hash;
+					push @{$config{oid}}, $row->{oid};
 				} else {
 					stop("File $fName already exists in database. Use --ignore switch to process command with it", 2);
 				}
@@ -260,21 +262,15 @@ sub createObjectList {
 				$config{files_checked}->{$fName} = $hash;
 			}
 		} else {
-			if ($row == NOT_FOUND) {
+			if ($row == NOT_FOUND && !$config{ignore}) {
 				stop("File $fName was not found in database. You need to add it first using 'add' or 'attach' commands", 2);
+			} else {
+			hashMerge($objectList, $row);
 			}
-			push @{$config{hash}}, $hash;
 		}
 	}
 
-	foreach my $hash (@{$config{hash}}) {
-		$arr = findObjects('hash', $hash, $objectList);
-		if ($arr == SQL_ERROR) {
-			return SQL_ERROR;
-		}
-		stop("There is no such object: $hash", 2) if ($arr == NOT_FOUND && !$config{ignore});
-	}
-	foreach my $type(('hash', 'name', 'source')) {
+	foreach my $type(('oid', 'hash', 'name', 'source')) {
 		foreach my $value (@{$config{$type}}) {
 			$arr = findObjects($type, $value, $objectList);
 			if ($arr == SQL_ERROR) {
@@ -334,7 +330,7 @@ sub printAttributes {
 	my $objectInfo = shift;
 	my $attributes = findObjectAttributes($objectInfo->{oid});
 	my $delim = ($config{human}?"\n":", ");
-	my $result;
+	my $result = '';
 	my $i = 0;
 	while(my ($key, $value) = each(%$attributes)) {
 		$result .= $delim if ($i++);
@@ -361,8 +357,8 @@ sub extractList{
 	# For example, it can be symlink or copy
 	my $objects = shift;
 	my $exportFunc = shift;
-	while (my ($hash, $objInfo) = each %$objects) {
-		my $path = hash2dir($objInfo->{hash}) . "/$hash";
+	while (my ($oid, $objInfo) = each %$objects) {
+		my (undef, $path) = oid2location($oid);
 		# TODO: hackish - need to handle URLs
 		my (undef, undef, $fName) = File::Spec->splitpath($objInfo->{source});
 		my ($name, $ext);
@@ -385,7 +381,7 @@ sub cmdList {
 	my $files = getTagsObjects($config{tags});
 # TODO: decide, if I need to show error 'tag not found', or just show empty tag
 	return $files unless (ref $files);
-	while (my ($hash, $row) = each(%$files)) {
+	while (my ($oid, $row) = each(%$files)) {
 		my $arr = createObjectOutput($row);
 		printArray($arr, "\t", "", "\n");
 	}
@@ -413,7 +409,7 @@ sub cmdUntag {
 
 	my $tagFilter =  'tags.name IN (' . arr2bind($config{tags}) . ')';
 	my @objects = keys %$objectList;
-	my $objFilter =  'objects.hash IN (' . arr2bind(\@objects) . ')';
+	my $objFilter =  'objects.oid IN (' . arr2bind(\@objects) . ')';
 	my $filterSql = "SELECT lid FROM links INNER JOIN objects ON (links.oid=objects.oid) INNER JOIN tags ON (links.tid=tags.tid) WHERE $tagFilter AND $objFilter";
 	my $sql = "DELETE FROM links WHERE lid IN ($filterSql)";
 	$dbh->begin_work();
@@ -440,7 +436,7 @@ sub listTagContent {
 		"SELECT * FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE tags.name=?");
 	return SQL_ERROR unless($sth->execute($tag));
 	while ($row = $sth->fetchrow_hashref) {
-		$result->{$row->{hash}} = $row;
+		$result->{$row->{oid}} = $row;
 	}
 	return NOT_FOUND unless (%$result);
 	hashMerge($objects, $result) if ($objects);
@@ -461,10 +457,10 @@ sub hashMerge {
 }
 
 sub getObjectInfo {
-	my $hash = shift;
+	my $oid = shift;
 	my $result;
-	my $sth = $dbh->prepare("SELECT hash, source, addtime, name, description FROM objects WHERE hash=?");
-	return SQL_ERROR unless ($sth->execute($hash));
+	my $sth = $dbh->prepare("SELECT hash, source, addtime, name, description FROM objects WHERE oid=?");
+	return SQL_ERROR unless ($sth->execute($oid));
 	return NOT_FOUND unless ($result = $sth->fetchrow_hashref());
 	return $result;
 }
@@ -481,13 +477,13 @@ sub cmdTaglist {
 }
 
 sub getObjectTags {
-	# accepts hash that identify object;
+	# accepts oid of object;
 	# returns ref to list with tag names
-	my $hash = shift;
+	my $oid = shift;
 	my @tags;
 	my $sth = $dbh->prepare(
-		"SELECT tags.name FROM tags INNER JOIN links ON (tags.tid=links.tid) INNER JOIN objects ON (objects.oid = links.oid) WHERE objects.hash=?");
-	return SQL_ERROR unless ($sth->execute($hash));
+		"SELECT tags.name FROM tags INNER JOIN links ON (tags.tid=links.tid) WHERE links.oid=?");
+	return SQL_ERROR unless ($sth->execute($oid));
 	while (my $tagName = $sth->fetchrow_array) {
 		push @tags, $tagName;
 	}
@@ -495,11 +491,11 @@ sub getObjectTags {
 }
 sub cmdShow {
 # TODO: add different output formats
-	while (my ($hash, $row) = each(%$objectList)) {
-
+	while (my ($oid, $row) = each(%$objectList)) {
+#TODO: make output of tags optional
 		my $arr = createObjectOutput($row);
 		printArray($arr, "\t", "", ":\t");
-		my $tags = getObjectTags($hash);
+		my $tags = getObjectTags($oid);
 		my $i = 0;
 		foreach my $tag (@$tags) {
 			print ', ' if ($i++);
@@ -515,29 +511,35 @@ sub grabObject {
 #TODO: refactor to accept URLs
 #	create date-named dir
 	my $time = time();
-	my $dirName = hash2dir($hash);
-	mkdir $dirName;
-
+	#	store in db: did	hash	external_filename	add_time
+	$file = File::Spec->rel2abs($file);
 	# split filename to parts
 	my ($vol, $path, $fName) = File::Spec->splitpath($file);
-	unless (-f "$dirName/$hash") {
+	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, name, addtime) VALUES (?, ?, ?, ?)");
+	unless ($sth->execute($hash, $file, $fName, $time)) {
+		return SQL_ERROR;
+	}
+	my $oid = $dbh->func('last_insert_rowid');
+
+	# copy file to internal storage
+
+	my ($dirName, $fullName) = oid2location($oid);
+	mkdir $dirName;
+
+
+	unless (-f $fullName) {
 		# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
-		if ($config{copy} || !link $file, "$dirName/$hash") {
+		if ($config{copy} || !link $file, $fullName) {
 		# cannot create hardlink, so we need copy
-			my $result = copy $file, "$dirName/$hash";
+			my $result = copy $file, $fullName;
 			#if we cannot copy, abort
 			return FS_ERROR unless ($result);
 		}
 	} else {
 		stop("File $file already exists and this condition not catched  - error in program!",3) unless $config{ignore};
 	}
-	#	store in db: did	hash	external_filename	add_time
-	$file = File::Spec->rel2abs($file);
-	my $sth = $dbh->prepare("INSERT INTO objects (hash, source, name, addtime) VALUES (?, ?, ?, ?)");
-	unless ($sth->execute($hash, $file, $fName, $time)) {
-		return SQL_ERROR;
-	}
-	my $oid = $dbh->func('last_insert_rowid');
+
+	return $oid;
 }
 
 sub cmdTag {
@@ -616,10 +618,9 @@ sub cmdModify {
 	}
 	$dbh->begin_work();
 	#create SQL to handle all objects in one SQL statement
-	my @objects = values %$objectList;
-	my $objFilter = arr2bind(\@objects);
+	my @oids = keys %$objectList;
+	my $objFilter = arr2bind(\@oids);
 	$objFilter = "oid IN ($objFilter)";
-	my @oids = map {$_->{oid}} @objects;
 
 	#process basic attributes (stored in 'objects' table
 	if (@basic) {
@@ -677,7 +678,7 @@ sub findObjects{
 	};
 	my $row;
 	while ($row = $sth->fetchrow_hashref()) {
-		$results{$row->{hash}} = $row;
+		$results{$row->{oid}} = $row;
 	}
 	return NOT_FOUND if (!%results);
 	hashMerge $objects, \%results if ($objects);
@@ -686,11 +687,11 @@ sub findObjects{
 
 sub findObjectAttributes{
 	# oid of object
-	my $value = shift;
+	my $oid = shift;
 	my $sql = "SELECT name, value FROM attrs WHERE oid=?";
 	my %results;
 	my $sth = $dbh->prepare($sql);
-	unless ($sth->execute($value)) {
+	unless ($sth->execute($oid)) {
 		return SQL_ERROR;
 	};
 	my $row;
@@ -700,10 +701,10 @@ sub findObjectAttributes{
 	return \%results;
 }
 
-sub hash2dir {
-	my  $hash = shift;
-	my $prefix = substr $hash, 0, 2;
-	return "$itemDir/$prefix";
+sub oid2location {
+	my $oid = shift;
+	my $dir="$itemDir/" . sprintf("%03d", substr($oid, 0, 3));
+	return ($dir, "$dir/$oid");
 };
 
 sub stop {
