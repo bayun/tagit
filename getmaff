@@ -1,0 +1,75 @@
+#!/usr/bin/perl
+
+use Date::Format;
+
+print "USAGE: getmaff url [maffname]" unless @ARGV;
+
+my $url = $ARGV[0];
+my $maffname;
+if (@ARGV >1) {
+	$maffname = $ARGV[1];
+} else {
+	$maffname = 'webpage.maff';
+}
+
+my $time = time();
+$date = time2str("%C", $time);
+my $dir = $time;
+mkdir $dir;
+chdir $dir;
+`wget -k -p -nH -H --restrict-file-names=windows -o wget.log "$url"`;
+if ($?) {
+	print STDERR "Error downloading page - aborted\n";
+	exit(1);
+}
+open F, "<wget.log";
+my $mainFile;
+my $contentType;
+while(<F>) {
+	chomp;
+	if (/^\s+Content-type:\s+(.+)/) {
+		$contentType = $1;
+	}
+	if (/\`(.+)\'/) {
+		$mainFile = $1;
+		last;
+	}
+}
+close F;
+unless ($mainFile) {
+	print STDERR "Invalid download - cannot determine main file name\n";
+	exit(1);
+}
+my $charset;
+if ($contentType =~ /; charset=(.+)/) {
+	$charset = $1;
+} else {
+	$charset = 'utf-8';
+}
+
+my $RDF = qq{<?xml version="1.0"?>
+<RDF:RDF xmlns:MAF="http://maf.mozdev.org/metadata/rdf#"
+         xmlns:NC="http://home.netscape.com/NC-rdf#"
+         xmlns:RDF="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <RDF:Description RDF:about="urn:root">
+    <MAF:originalurl RDF:resource="$url"/>
+    <MAF:title RDF:resource="Saved by getmaff"/>
+    <MAF:archivetime RDF:resource="$date"/>
+    <MAF:indexfilename RDF:resource="$mainFile"/>
+    <MAF:charset RDF:resource="$charset"/>
+  </RDF:Description>
+</RDF:RDF>
+};
+
+open F, ">index.rdf";
+print F $RDF;
+close F;
+
+chdir '..';
+
+`zip -r $maffname $dir`;
+if ($?) {
+	print STDERR "cannot create zip archive: $maffname containing directory $dir\n";
+	exit(2);
+}
+`rm -rf $dir`;

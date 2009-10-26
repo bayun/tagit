@@ -63,7 +63,7 @@ my $dbh = DBI->connect($base,"","",
 # configuration array. It will be filled by GetOptions.
 # It is initialized there to disable warnings about uninitialized variables
 
-my %config = (	tags	=> [], 
+my %options = (	tags	=> [], 
 				name	=> [],
 				source	=> [],
 				file	=> [],
@@ -203,7 +203,7 @@ if (@ARGV) {
 stop("Invalid command", 1) unless exists $commands{$cmd};
 
 
-my @options = (\%config);
+my @options = (\%options);
 {
 # create option list for current command
 	my $params = $commands{$cmd};
@@ -217,17 +217,17 @@ stop("",1) unless GetOptions(@options);
 
 #check --output arguments
 
-if ($config{output}) {
-	foreach my $field(@{$config{output}}) {
+if ($options{output}) {
+	foreach my $field(@{$options{output}}) {
 		stop("Invalid field in --output: $field", 1) unless exists $outputVariants{$field};
 	}
 } else {
-	$config{output} = [@defaultOutputFormat];
+	$options{output} = [@defaultOutputFormat];
 }
 
 # add unprocessed arguments into config-defined list: tags, file, hash etc
 if (@ARGV) {
-	push @{$config{$commands{$cmd}->{args}}}, @ARGV;
+	push @{$options{$commands{$cmd}->{args}}}, @ARGV;
 }
 if ($commands{$cmd}->{objects}) {
 	$objectList = createObjectList();
@@ -244,25 +244,25 @@ sub createObjectList {
 	#	2) if we QUERY database, we use fles as source for hash computation and add them to hash array. If
 	#		such hash is absend in database, hash handling code returns error or jus continue, depending of
 	#		--ignore switch presense
-	foreach my $fName (@{$config{file}}) {
+	foreach my $fName (@{$options{file}}) {
 		unless (-f $fName) {
-			next if ($config{ignore});
+			next if ($options{ignore});
 			stop("File not found: $fName", 2);
 		}
 		my $hash = file_md5_hex($fName);
 		my $row = findObjects('hash', $hash);
 		if ($commands{$cmd}->{unsafe}) {
 			if ($row != NOT_FOUND) {
-				if ($config{ignore}) {
-					push @{$config{oid}}, $row->{oid};
+				if ($options{ignore}) {
+					push @{$options{oid}}, $row->{oid};
 				} else {
 					stop("File $fName already exists in database. Use --ignore switch to process command with it", 2);
 				}
 			} else {
-				$config{files_checked}->{$fName} = $hash;
+				$options{files_checked}->{$fName} = $hash;
 			}
 		} else {
-			if ($row == NOT_FOUND && !$config{ignore}) {
+			if ($row == NOT_FOUND && !$options{ignore}) {
 				stop("File $fName was not found in database. You need to add it first using 'add' or 'attach' commands", 2);
 			} else {
 			hashMerge($objectList, $row);
@@ -271,12 +271,12 @@ sub createObjectList {
 	}
 
 	foreach my $type(('oid', 'hash', 'name', 'source')) {
-		foreach my $value (@{$config{$type}}) {
+		foreach my $value (@{$options{$type}}) {
 			$arr = findObjects($type, $value, $objectList);
 			if ($arr == SQL_ERROR) {
 				return SQL_ERROR;
 			}
-			stop("There is no such object: $value", 2) if ($arr == NOT_FOUND && !$config{ignore});
+			stop("There is no such object: $value", 2) if ($arr == NOT_FOUND && !$options{ignore});
 		}
 	}
 	return $objectList;
@@ -303,7 +303,7 @@ sub createObjectOutput {
 	# arg is ref to hash with object properties
 	my $objectInfo = shift;
 	my @values;
-	for my $field (@{$config{output}}) {
+	for my $field (@{$options{output}}) {
 		if (ref($outputVariants{$field}) eq 'CODE') {
 			push @values, &{$outputVariants{$field}}($objectInfo);
 		} else {
@@ -329,23 +329,23 @@ sub printTime {
 sub printAttributes {
 	my $objectInfo = shift;
 	my $attributes = findObjectAttributes($objectInfo->{oid});
-	my $delim = ($config{human}?"\n":", ");
+	my $delim = ($options{human}?"\n":", ");
 	my $result = '';
 	my $i = 0;
 	while(my ($key, $value) = each(%$attributes)) {
 		$result .= $delim if ($i++);
 		$result .="$key = $value";
 	}
-	$result .= $delim if ($config{human});
+	$result .= $delim if ($options{human});
 	return $result;
 }
 
 sub cmdGet {
-	map {extractList($_, \&my_symlink)} ($objectList, getTagsObjects($config{tags}));
+	map {extractList($_, \&my_symlink)} ($objectList, getTagsObjects($options{tags}));
 }
 
 sub cmdExport {
-	map {extractList($_, \&copy)} ($objectList, getTagsObjects($config{tags}));
+	map {extractList($_, \&copy)} ($objectList, getTagsObjects($options{tags}));
 }
 
 sub my_symlink{
@@ -378,7 +378,7 @@ sub extractList{
 
 
 sub cmdList {
-	my $files = getTagsObjects($config{tags});
+	my $files = getTagsObjects($options{tags});
 # TODO: decide, if I need to show error 'tag not found', or just show empty tag
 	return $files unless (ref $files);
 	while (my ($oid, $row) = each(%$files)) {
@@ -402,19 +402,19 @@ sub cmdUntag {
 #		stop("Please, enter at least one object (there are many ways to do htis - see man page)", 1);
 		return;
 	}
-	unless (scalar @{$config{tags}}) {
+	unless (scalar @{$options{tags}}) {
 #		stop("Please, enter at least one tag (after --tags switch)", 1);
 		return;
 	}
 
-	my $tagFilter =  'tags.name IN (' . arr2bind($config{tags}) . ')';
+	my $tagFilter =  'tags.name IN (' . arr2bind($options{tags}) . ')';
 	my @objects = keys %$objectList;
 	my $objFilter =  'objects.oid IN (' . arr2bind(\@objects) . ')';
 	my $filterSql = "SELECT lid FROM links INNER JOIN objects ON (links.oid=objects.oid) INNER JOIN tags ON (links.tid=tags.tid) WHERE $tagFilter AND $objFilter";
 	my $sql = "DELETE FROM links WHERE lid IN ($filterSql)";
 	$dbh->begin_work();
 	my $sth = $dbh->prepare($sql);
-	unless ($sth->execute(@{$config{tags}}, keys %$objectList)) {
+	unless ($sth->execute(@{$options{tags}}, keys %$objectList)) {
 		$dbh->rollback();
 		stop("Error while untagging", 3);
 	};
@@ -529,27 +529,27 @@ sub grabObject {
 
 	unless (-f $fullName) {
 		# hardlink file into this dir. If not allowed (by --copy) or different filesystems - copy
-		if ($config{copy} || !link $file, $fullName) {
+		if ($options{copy} || !link $file, $fullName) {
 		# cannot create hardlink, so we need copy
 			my $result = copy $file, $fullName;
 			#if we cannot copy, abort
 			return FS_ERROR unless ($result);
 		}
 	} else {
-		stop("File $file already exists and this condition not catched  - error in program!",3) unless $config{ignore};
+		stop("File $file already exists and this condition not catched  - error in program!",3) unless $options{ignore};
 	}
 
 	return $oid;
 }
 
 sub cmdTag {
-	unless (scalar @{$config{tags}}) {
+	unless (scalar @{$options{tags}}) {
 		stop("Please, enter at least one tag (after --tags switch) to tag with", 1);
 	}
 	my @oids;
 	my $oid;
 	$dbh->do("BEGIN TRANSACTION");
-	while(my ($file, $hash) = each %{$config{files_checked}}) {
+	while(my ($file, $hash) = each %{$options{files_checked}}) {
 		$oid = grabObject($file, $hash);
 		unless ($oid > 0) {
 			$dbh->do("ROLLBACK TRANSACTION");
@@ -562,9 +562,9 @@ sub cmdTag {
 	my $tag;
 	my %tags;
 
-	my $tagFilter = arr2bind($config{tags});
+	my $tagFilter = arr2bind($options{tags});
 	my $sth = $dbh->prepare("SELECT tid, name FROM tags WHERE name IN ($tagFilter)");
-	unless ($sth->execute(@{$config{tags}})) {
+	unless ($sth->execute(@{$options{tags}})) {
 		$dbh->do("ROLLBACK TRANSACTION");
 		stop("Error while getting tags info from database", 3);
 	} else {
@@ -573,7 +573,7 @@ sub cmdTag {
 		}
 	}
 	$sth = $dbh->prepare("INSERT INTO tags (name) VALUES (?)");
-	foreach $tag (@{$config{tags}}) {
+	foreach $tag (@{$options{tags}}) {
 		next if exists ($tags{$tag});
 		unless ($sth->execute($tag)) {
 			$dbh->do("ROLLBACK TRANSACTION");
@@ -600,12 +600,12 @@ sub cmdTag {
 
 sub cmdModify {
 	stop ("You need to supply at least one object to modify", 1) unless (%$objectList);
-	stop ("You need to supply at least one object property to modify") unless (%{$config{set}});
+	stop ("You need to supply at least one object property to modify") unless (%{$options{set}});
 	# check, if object properties are allowed to modify
 	my @basic; 	#basic attributes
 	my @attr_del;	#empty extended attributes - delete them
 	my @attrs;		#non-empty extended attributes - create or update them
-	while (my($key, $value) = each %{$config{set}}) {
+	while (my($key, $value) = each %{$options{set}}) {
 		if (exists $modifyVariants{$key}) {
 			push @basic, $key;
 			next;
@@ -628,7 +628,7 @@ sub cmdModify {
 		my @values;
 		for my $attr (@basic) {
 			$pairs .= ' ' . $modifyVariants{$attr} . '=?,';
-			push @values, $config{set}->{$attr};
+			push @values, $options{set}->{$attr};
 		}
 		chop $pairs;
 		my $sth = $dbh->prepare("UPDATE objects SET $pairs WHERE $objFilter");
@@ -650,7 +650,7 @@ sub cmdModify {
 	$sth = $dbh->prepare("INSERT OR REPLACE INTO attrs (oid, name, value) VALUES (?, ?, ?)");
 	foreach my $oid(@oids) {
 		foreach my $attr(@attrs) {
-			unless($sth->execute($oid, $attr, $config{set}->{$attr})) {
+			unless($sth->execute($oid, $attr, $options{set}->{$attr})) {
 				$dbh->rollback();
 				stop("Error while updating extended attribute $attr for file with id $oid", 3);
 			}
