@@ -3,6 +3,8 @@
 use strict;
 
 
+import 'utils.pl';
+
 my $dataDir = "$ENV{HOME}/.local/share/tagit";
 my $itemDir = "$dataDir/items";
 my $dbName = "$dataDir/base.sqlite";
@@ -313,14 +315,6 @@ sub createObjectOutput {
 	return \@values;
 }
 
-sub printArray {
-	# at least $row and $delim must be passed
-	my ($row, $delim, $start, $end) = @_;
-	print $start if defined $start;
-	print join($delim, @$row);
-	print $end if defined $end;
-}
-
 sub printTime {
 	my $objectInfo = shift;
 	return scalar localtime($objectInfo->{addtime});
@@ -388,15 +382,6 @@ sub cmdList {
 }
 
 
-sub arr2bind {
-	# create '?' for each array item
-	# for example, for ('a', 'b', 5) this will return '?, ?, ?';
-	my $arr = shift;
-	my $s = '?,' x @$arr;
-	chop $s;
-	return $s;
-}
-
 sub cmdUntag {
 	unless (scalar %$objectList) {
 #		stop("Please, enter at least one object (there are many ways to do htis - see man page)", 1);
@@ -444,17 +429,7 @@ sub listTagContent {
 }
 
 
-sub hashMerge {
-	return undef unless @_;
-	my $main = shift;
-	foreach my $hash (@_) {
-		while (my ($k, $v) = each(%$hash)) {
-			$main->{$k} = $v;
-		}
-	}
-	
-	return $main;
-}
+
 
 sub getObjectInfo {
 	my $oid = shift;
@@ -707,13 +682,4 @@ sub oid2location {
 	return ($dir, "$dir/$oid");
 };
 
-sub stop {
-	my $code;
-	if (scalar @_ >1) {
-		$code = pop;
-	} else {
-		$code = 1;
-	}
-	print @_, "\n";
-	exit $code;
-}
+
